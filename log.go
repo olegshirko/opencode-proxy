@@ -34,6 +34,13 @@ type RequestRecord struct {
 	Allowance float64
 	Aborted   bool
 	Capture   *CaptureRecord
+
+	// Cell scheduling: which upstream cell the request used, how long it
+	// waited for it, and which agent chain and request class it belongs to.
+	Cell    string
+	QueueMS int64
+	Agent   string
+	Class   string
 }
 
 // CaptureRecord holds the traffic captured for one request. Truncation is
@@ -136,6 +143,21 @@ func formatRequestLine(now time.Time, rec RequestRecord) string {
 	if rec.Why != "" {
 		b.WriteString(" why=")
 		b.WriteString(rec.Why)
+	}
+	if rec.Cell != "" {
+		b.WriteString(" cell=")
+		b.WriteString(rec.Cell)
+	}
+	if rec.Agent != "" {
+		b.WriteString(" agent=")
+		b.WriteString(rec.Agent)
+	}
+	if rec.Class != "" {
+		b.WriteString(" class=")
+		b.WriteString(rec.Class)
+	}
+	if rec.QueueMS > 0 {
+		fmt.Fprintf(&b, " queue_ms=%d", rec.QueueMS)
 	}
 	fmt.Fprintf(&b, " status=%d dur=%.2fs in=%d out=%d cache_read=%d cost=%f attempt=%d\n",
 		rec.Status, rec.Duration.Seconds(), int64(rec.In), int64(rec.Out),

@@ -18,9 +18,20 @@ type Config struct {
 	Log                   LogConfig    `json:"log"`
 	Models                ModelsConfig `json:"models"`
 	Retry                 RetryConfig  `json:"retry"`
-	Admin                 AdminConfig  `json:"admin"`
-	ConnectTimeoutSeconds int          `json:"connect_timeout_seconds"`
-	SessionCostFile       string       `json:"session_cost_file"`
+	Admin                 AdminConfig     `json:"admin"`
+	Scheduler             SchedulerConfig `json:"scheduler"`
+	ConnectTimeoutSeconds int             `json:"connect_timeout_seconds"`
+	SessionCostFile       string          `json:"session_cost_file"`
+}
+
+// SchedulerConfig tunes cell assignment and the keepalive used while retrying.
+type SchedulerConfig struct {
+	MaxConcurrentCells  int  `json:"max_concurrent_cells"`
+	QueueTimeoutMS      int  `json:"queue_timeout_ms"`
+	KeepaliveAfterMS    int  `json:"keepalive_after_ms"`
+	KeepaliveIntervalMS int  `json:"keepalive_interval_ms"`
+	FallbackAfterMS     int  `json:"fallback_after_ms"`
+	FallbackRotateMain  bool `json:"fallback_rotate_main"`
 }
 
 type LogConfig struct {
@@ -99,7 +110,15 @@ func Defaults() Config {
 			Token:   "",
 		},
 		ConnectTimeoutSeconds: 15,
-		SessionCostFile:       filepath.Join(filepath.Dir(logFile), "session-cost.json"),
+		Scheduler: SchedulerConfig{
+			MaxConcurrentCells:  8,
+			QueueTimeoutMS:      60000,
+			KeepaliveAfterMS:    3000,
+			KeepaliveIntervalMS: 5000,
+			FallbackAfterMS:     20000,
+			FallbackRotateMain:  false,
+		},
+		SessionCostFile: filepath.Join(filepath.Dir(logFile), "session-cost.json"),
 	}
 }
 

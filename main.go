@@ -28,6 +28,9 @@ func defaultConfigPath() string {
 func buildRouter(proxy *Proxy) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/admin/", proxy.AdminHandler())
+	// Model discovery endpoint: the app may read it instead of a hand-written
+	// list. It is answered locally and never forwarded.
+	mux.HandleFunc("GET /v1/models", proxy.ModelsHandler)
 	// The desktop app probes this before it will use the endpoint.
 	mux.HandleFunc("HEAD /api/hello", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -77,6 +80,7 @@ func main() {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
 	proxy.SetCostStore(costs)
+	proxy.SetScheduler(NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
 	flushCtx, stopFlush := context.WithCancel(context.Background())
 	defer stopFlush()
 	costs.StartFlusher(flushCtx, 5*time.Second)

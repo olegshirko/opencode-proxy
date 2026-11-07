@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -38,6 +39,36 @@ func (p *Proxy) AdminHandler() http.Handler {
 	})
 }
 
+// ModelsHandler serves the Anthropic model-list shape from the registry, so a
+// client can populate its picker without a hand-written list. Only ids that
+// look like Claude models are offered, and nothing is forwarded upstream.
+func (p *Proxy) ModelsHandler(w http.ResponseWriter, r *http.Request) {
+	type entry struct {
+		Type        string `json:"type"`
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}
+	out := make([]entry, 0, len(p.reg.All()))
+	for _, m := range p.reg.All() {
+		if !m.Available {
+			continue
+		}
+		id := m.Picker
+		if id == "" {
+			id = m.ID
+		}
+		lower := strings.ToLower(id)
+		if !strings.HasPrefix(lower, "claude") && !strings.Contains(lower, "anthropic") {
+			continue
+		}
+		out = append(out, entry{Type: "model", ID: id, DisplayName: m.Label})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":     out,
+		"has_more": false,
+	})
+}
+
 func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := p.cfg.Get()
 	st := p.Stats()
@@ -52,6 +83,11 @@ func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 		"retries":        st.Retries,
 		"upstream_429":   st.Upstream429,
 		"in_flight":      st.InFlight,
+		"queued":         st.Queued,
+		"cells_in_use":   st.CellsInUse,
+		"queue_wait_ms":  st.QueueWaitMS,
+		"keepalives":     st.Keepalives,
+		"max_cells":      cfg.Scheduler.MaxConcurrentCells,
 	})
 }
 

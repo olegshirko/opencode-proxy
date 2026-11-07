@@ -192,8 +192,8 @@ func TestSessionHeaderSent(t *testing.T) {
 	h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, map[string]string{
 		"X-Claude-Code-Session-Id": "session-abc",
 	})
-	if s := <-got; s != "session-abc" {
-		t.Fatalf("x-opencode-session = %q, want session-abc", s)
+	if s := <-got; s != "s:session-abc" {
+		t.Fatalf("x-opencode-session = %q, want s:session-abc", s)
 	}
 }
 
@@ -204,8 +204,8 @@ func TestSessionFallbackWhenHeaderMissing(t *testing.T) {
 	}, func(c *Config) { c.SessionFallback = "fallback-1" })
 
 	h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
-	if s := <-got; s != "fallback-1" {
-		t.Fatalf("x-opencode-session = %q, want fallback-1", s)
+	if s := <-got; s != "s:fallback-1" {
+		t.Fatalf("x-opencode-session = %q, want s:fallback-1", s)
 	}
 }
 

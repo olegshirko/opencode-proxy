@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,10 @@ type Stats struct {
 	Retries     int64
 	Upstream429 int64
 	InFlight    int64
+	Queued      int
+	CellsInUse  int
+	QueueWaitMS int64
+	Keepalives  int64
 }
 
 // SessionCost is the accumulated cost of one session. USD sums
@@ -60,10 +65,13 @@ type Proxy struct {
 	retries     atomic.Int64
 	upstream429 atomic.Int64
 	inFlight    atomic.Int64
+	keepalives  atomic.Int64
 
 	tokens tokenCache
 
 	costs *CostStore
+
+	sched *CellScheduler
 
 	// onRecord observes every logged record. It is a test seam; production
 	// code leaves it nil.
@@ -82,7 +90,14 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client
 		client: client,
 		tokens: newTokenCache(),
 		costs:  store,
+		sched:  NewCellScheduler(8),
 	}
+}
+
+// SetScheduler swaps the cell scheduler, which main configures from the
+// scheduler section of the config.
+func (p *Proxy) SetScheduler(s *CellScheduler) {
+	p.sched = s
 }
 
 // SetCostStore swaps the cost store, which main uses to give the proxy a
@@ -93,11 +108,16 @@ func (p *Proxy) SetCostStore(s *CostStore) {
 
 // Stats returns the current counters.
 func (p *Proxy) Stats() Stats {
+	active, queued := p.sched.Stats()
 	return Stats{
 		Requests:    p.requests.Load(),
 		Retries:     p.retries.Load(),
 		Upstream429: p.upstream429.Load(),
 		InFlight:    p.inFlight.Load(),
+		Queued:      queued,
+		CellsInUse:  active,
+		QueueWaitMS: p.sched.QueueWaitMS(),
+		Keepalives:  p.keepalives.Load(),
 	}
 }
 
@@ -117,10 +137,54 @@ func newRequestID() string {
 	return fmt.Sprintf("%06x", requestIDCounter.Add(1)&0xffffff)
 }
 
-// forwardedHeaders are the client headers copied to the upstream request.
+// forwardedHeaders are the client headers always copied upstream. Every
+// anthropic-* header is copied as well, whatever it is: the gateway contract
+// requires anthropic-beta and its siblings to reach the provider verbatim,
+// otherwise extended context, interleaved thinking, tool search and
+// structured outputs are silently disabled.
 var forwardedHeaders = []string{
 	"Authorization", "x-api-key", "anthropic-version",
-	"content-type", "user-agent", "anthropic-beta",
+	"content-type", "user-agent",
+}
+
+func forwardHeader(lower string) bool {
+	for _, name := range forwardedHeaders {
+		if strings.EqualFold(name, lower) {
+			return true
+		}
+	}
+	return strings.HasPrefix(lower, "anthropic-")
+}
+
+// cellKey derives the upstream cell for a request. Each agent chain gets its
+// own cell so parallel subagents stop refusing each other by prefill.
+// Compaction deliberately stays on the main cell: it needs the whole context.
+func cellKey(r *http.Request, session string) (key, agent, class string, priority int) {
+	agent = r.Header.Get("X-Claude-Code-Agent-Id")
+	class = r.Header.Get("X-Claude-Code-Request-Class")
+	switch {
+	case r.Header.Get("X-Claude-Code-Compaction") != "":
+		return "s:" + session, agent, class, PriorityMain
+	case strings.EqualFold(class, "auxiliary"):
+		return "s:" + session + ":aux", agent, class, PriorityAuxiliary
+	case agent != "":
+		return "s:" + session + ":a:" + agent, agent, class, PrioritySubagent
+	default:
+		return "s:" + session, agent, class, PriorityMain
+	}
+}
+
+// writeOverloaded emits an Anthropic-shaped overloaded_error body.
+func writeOverloaded(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "overloaded_error",
+			"message": message,
+		},
+	})
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +198,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if session == "" {
 		session = cfg.SessionFallback
 	}
+	cell, agent, class, prio := cellKey(r, session)
+	var waited time.Duration
 
 	var (
 		modelIn, modelOut, why string
@@ -141,6 +207,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		acc                    usageAccumulator
 		status, attempts       int
 		aborted, billable      = false, true
+		streamReq              bool
 	)
 
 	defer func() {
@@ -158,6 +225,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			In: acc.in, Out: acc.out, CacheRead: acc.cache,
 			Cost: acc.cost, Allowance: acc.allowance,
 			Aborted: aborted, Capture: capture,
+			Cell: cell, Agent: agent, Class: class, QueueMS: waited.Milliseconds(),
 		}
 		if p.onRecord != nil {
 			p.onRecord(rec)
@@ -184,8 +252,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(body) > 0 && json.Valid(body) {
 		var data map[string]any
 		if json.Unmarshal(body, &data) == nil {
-			if m, ok := data["model"].(string); ok {
-				target, reason := p.reg.Resolve(m, cfg.Models)
+			if v, ok := data["stream"].(bool); ok && v {
+				streamReq = true
+			}
+			if m, ok := data["model"].(string); ok {				target, reason := p.reg.Resolve(m, cfg.Models)
 				data["model"] = target
 				if rewritten, err := json.Marshal(data); err == nil {
 					body = rewritten
@@ -196,13 +266,43 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	base, err := p.upstreamRequest(ctx, r, cfg, body, session)
+
+	// Each agent chain gets its own upstream cell, so parallel subagents stop
+	// colliding on one cell and refusing each other by prefill.
+	release, wait, aerr := p.sched.Acquire(ctx, cell,
+		prio, time.Duration(cfg.Scheduler.QueueTimeoutMS)*time.Millisecond)
+	waited = wait
+	if aerr != nil {
+		status = http.StatusTooManyRequests
+		if errors.Is(aerr, ErrQueueTimeout) {
+			status = http.StatusTooManyRequests
+			w.Header().Set("Retry-After", "5")
+			writeOverloaded(w, "no upstream cell available within queue_timeout_ms")
+		} else if ctx.Err() == nil {
+			http.Error(w, aerr.Error(), http.StatusBadGateway)
+			status = http.StatusBadGateway
+		} else {
+			aborted = true
+		}
+		return
+	}
+	defer release()
+	p.sched.ObserveQueueWait(waited)
+
+	base, err := p.upstreamRequest(ctx, r, cfg, body, cell)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		status = http.StatusBadGateway
 		return
 	}
 	capture = newCaptureRecord(cfg, base.Header, body)
+
+	// Streaming requests own their retry loop, because a client that sees no
+	// bytes assumes the stream died. serveStream keeps it fed with pings.
+	if streamReq {
+		status, attempts, acc, aborted = p.serveStream(ctx, w, cfg, base, body, modelIn, capture)
+		return
+	}
 
 	if r.Method == http.MethodPost && r.URL.Path == "/v1/messages/count_tokens" {
 		billable = false
@@ -247,7 +347,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	acc, aborted = relayResponse(ctx, w, resp, capture, cfg)
+	acc, aborted = relayResponse(ctx, w, resp, capture, cfg, modelIn)
 }
 
 func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string) (*http.Request, error) {
@@ -259,8 +359,11 @@ func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Confi
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range forwardedHeaders {
-		for _, v := range r.Header.Values(name) {
+	for name, values := range r.Header {
+		if !forwardHeader(strings.ToLower(name)) {
+			continue
+		}
+		for _, v := range values {
 			req.Header.Add(name, v)
 		}
 	}
@@ -376,15 +479,45 @@ func parseRetryAfter(v string) time.Duration {
 // relayResponse streams the upstream body to the client, flushing every
 // chunk, while parsing usage for the request log and capturing the body when
 // requested. It reports whether the client went away.
-func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *CaptureRecord, cfg *Config) (usageAccumulator, bool) {
+func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *CaptureRecord, cfg *Config, modelIn string) (usageAccumulator, bool) {
 	var (
 		parser   *sseParser
 		raw      bytes.Buffer
 		captured *limitedBuffer
 		acc      usageAccumulator
 	)
+
+	// A JSON (non-streaming) response is small enough to rewrite before it is
+	// sent, so the client sees the model id it asked for.
+	if !isEventStream(resp.Header) && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		body, err := io.ReadAll(resp.Body)
+		if rec != nil && cfg.Log.Capture.ResponseBody {
+			text, truncated := truncateBody(body, cfg.Log.MaxBodyBytes)
+			rec.ResponseBody = text
+			if truncated {
+				rec.Truncated = true
+			}
+		}
+		body = rewriteModelJSON(body, modelIn)
+		aborted := false
+		if _, werr := w.Write(body); werr != nil {
+			aborted = true
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if err != nil && ctx.Err() != nil {
+			aborted = true
+		}
+		return parseUsageJSON(body), aborted
+	}
+
 	if isEventStream(resp.Header) {
-		parser = &sseParser{}
+		var flusher http.Flusher
+		if f, ok := w.(http.Flusher); ok {
+			flusher = f
+		}
+		parser = &sseParser{out: w, flusher: flusher, modelIn: modelIn}
 	}
 	if rec != nil && cfg.Log.Capture.ResponseBody {
 		captured = &limitedBuffer{max: cfg.Log.MaxBodyBytes}
@@ -396,20 +529,23 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
-			if parser != nil {
-				parser.Feed(chunk)
-			} else {
-				raw.Write(chunk)
-			}
 			if captured != nil {
 				captured.Write(chunk)
 			}
-			if _, werr := w.Write(chunk); werr != nil {
-				aborted = true
-				break
-			}
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+			if parser != nil {
+				if !parser.Feed(chunk) {
+					aborted = true
+					break
+				}
+			} else {
+				raw.Write(chunk)
+				if _, werr := w.Write(chunk); werr != nil {
+					aborted = true
+					break
+				}
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			}
 		}
 		if err != nil {
@@ -421,7 +557,9 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	}
 
 	if parser != nil {
-		parser.Close()
+		if !parser.Close() {
+			aborted = true
+		}
 		acc = parser.acc
 	} else {
 		acc = parseUsageJSON(raw.Bytes())
@@ -435,6 +573,56 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 	return acc, aborted
 }
 
+// rewriteModelJSON replaces the response's model id with the one the client
+// asked for, so a picker entry is echoed back instead of the upstream id.
+func rewriteModelJSON(body []byte, modelIn string) []byte {
+	if modelIn == "" || len(body) == 0 || !json.Valid(body) {
+		return body
+	}
+	var data map[string]any
+	if json.Unmarshal(body, &data) != nil {
+		return body
+	}
+	if _, ok := data["model"].(string); !ok {
+		return body
+	}
+	data["model"] = modelIn
+	out, err := json.Marshal(data)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// rewriteSSEModel rewrites the model inside a message_start event line.
+func rewriteSSEModel(line []byte, modelIn string) []byte {
+	if modelIn == "" || !bytes.Contains(line, []byte(`"message_start"`)) {
+		return line
+	}
+	payload := bytes.TrimPrefix(line, []byte("data:"))
+	payload = bytes.TrimSpace(payload)
+	if !json.Valid(payload) {
+		return line
+	}
+	var ev map[string]any
+	if json.Unmarshal(payload, &ev) != nil {
+		return line
+	}
+	msg, ok := ev["message"].(map[string]any)
+	if !ok {
+		return line
+	}
+	msg["model"] = modelIn
+	out, err := json.Marshal(ev)
+	if err != nil {
+		return line
+	}
+	res := make([]byte, 0, len(out)+6)
+	res = append(res, "data: "...)
+	res = append(res, out...)
+	return res
+}
+
 func isEventStream(h http.Header) bool {
 	return strings.Contains(strings.ToLower(h.Get("Content-Type")), "text/event-stream")
 }
@@ -444,25 +632,50 @@ func isEventStream(h http.Header) bool {
 type sseParser struct {
 	pending []byte
 	acc     usageAccumulator
+	out     io.Writer
+	flusher http.Flusher
+	modelIn string
 }
 
-func (s *sseParser) Feed(chunk []byte) {
+func (s *sseParser) Feed(chunk []byte) bool {
 	s.pending = append(s.pending, chunk...)
 	for {
 		i := bytes.IndexByte(s.pending, '\n')
 		if i < 0 {
-			return
+			return true
 		}
-		s.processLine(s.pending[:i])
+		line := s.pending[:i]
+		if !s.emit(line) {
+			return false
+		}
 		s.pending = s.pending[i+1:]
 	}
 }
 
-func (s *sseParser) Close() {
-	if len(s.pending) > 0 {
-		s.processLine(s.pending)
-		s.pending = nil
+// emit rewrites the model where needed, forwards the line, and records usage.
+func (s *sseParser) emit(line []byte) bool {
+	s.processLine(line)
+	if s.out != nil {
+		if _, err := s.out.Write(rewriteSSEModel(line, s.modelIn)); err != nil {
+			return false
+		}
+		if _, err := s.out.Write([]byte("\n")); err != nil {
+			return false
+		}
+		if s.flusher != nil {
+			s.flusher.Flush()
+		}
 	}
+	return true
+}
+
+func (s *sseParser) Close() bool {
+	if len(s.pending) > 0 {
+		ok := s.emit(s.pending)
+		s.pending = nil
+		return ok
+	}
+	return true
 }
 
 func (s *sseParser) processLine(line []byte) {
