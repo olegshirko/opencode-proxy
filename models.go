@@ -72,6 +72,13 @@ func (r *Registry) Native(id string) (Model, bool) {
 	return r.models[i], true
 }
 
+// All returns every model in file order, including unavailable ones.
+func (r *Registry) All() []Model {
+	out := make([]Model, len(r.models))
+	copy(out, r.models)
+	return out
+}
+
 // Available returns the usable models in file order.
 func (r *Registry) Available() []Model {
 	out := make([]Model, 0, len(r.models))
