@@ -257,7 +257,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if v, ok := data["stream"].(bool); ok && v {
 				streamReq = true
 			}
-			if m, ok := data["model"].(string); ok {				target, reason := p.reg.Resolve(m, cfg.Models)
+			stripThinkingSummaries(data)
+			if m, ok := data["model"].(string); ok {
+				target, reason := p.reg.Resolve(m, cfg.Models)
 				data["model"] = target
 				if rewritten, err := json.Marshal(data); err == nil {
 					body = rewritten
@@ -506,6 +508,7 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			}
 		}
 		body = rewriteModelJSON(body, modelIn)
+		body = addThinkingSummariesJSON(body)
 		aborted := false
 		if _, werr := w.Write(body); werr != nil {
 			aborted = true
@@ -524,7 +527,12 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 		if f, ok := w.(http.Flusher); ok {
 			flusher = f
 		}
-		parser = &sseParser{out: w, flusher: flusher, modelIn: modelIn}
+		parser = &sseParser{
+			out:         w,
+			flusher:     flusher,
+			modelIn:     modelIn,
+			summaryWait: time.Duration(cfg.Scheduler.ThinkingSummaryWaitMS) * time.Millisecond,
+		}
 	}
 	if rec != nil && cfg.Log.Capture.ResponseBody {
 		captured = &limitedBuffer{max: cfg.Log.MaxBodyBytes}
@@ -642,9 +650,18 @@ type sseParser struct {
 	out     io.Writer
 	flusher http.Flusher
 	modelIn string
+	// summaryWait bounds how long a thinking block's start event is held back
+	// while a one-line summary is collected. 0 disables the hold.
+	summaryWait time.Duration
+	hold        *thinkingHold
 }
 
 func (s *sseParser) Feed(chunk []byte) bool {
+	if s.hold != nil && time.Since(s.hold.started) > s.hold.wait {
+		if !s.flushHold() {
+			return false
+		}
+	}
 	s.pending = append(s.pending, chunk...)
 	for {
 		i := bytes.IndexByte(s.pending, '\n')
@@ -659,8 +676,31 @@ func (s *sseParser) Feed(chunk []byte) bool {
 	}
 }
 
-// emit rewrites the model where needed, forwards the line, and records usage.
+// emit forwards one SSE line. A thinking block's start event is held back
+// until a summary line is collected or the wait budget runs out; the deltas
+// buffered with it are replayed in order when it ships.
 func (s *sseParser) emit(line []byte) bool {
+	if s.hold != nil {
+		if isThinkingDeltaFor(line, s.hold.index) {
+			s.hold.deltas = append(s.hold.deltas, append([]byte(nil), line...))
+			s.hold.text.WriteString(thinkingDeltaText(line))
+			return s.settleHold()
+		}
+		// Blank separators inside a held event are buffered with it, so the
+		// client sees the original stream shape once the start ships.
+		if len(bytes.TrimSpace(line)) == 0 {
+			s.hold.deltas = append(s.hold.deltas, append([]byte(nil), line...))
+			return true
+		}
+		if !s.flushHold() {
+			return false
+		}
+	}
+	if h := maybeHoldThinkingStart(line, s.summaryWait); h != nil {
+		s.hold = h
+		s.processLine(line)
+		return true
+	}
 	s.processLine(line)
 	if s.out != nil {
 		if _, err := s.out.Write(rewriteSSEModel(line, s.modelIn)); err != nil {
@@ -676,7 +716,58 @@ func (s *sseParser) emit(line []byte) bool {
 	return true
 }
 
+// settleHold ships the held block as soon as a summary is known, or gives it
+// the generic one once the byte cap or the wait budget is spent.
+func (s *sseParser) settleHold() bool {
+	h := s.hold
+	if sum := firstMeaningfulLine(h.text.String()); sum != "" {
+		return s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
+	}
+	if h.text.Len() >= thinkingSummaryMaxBytes || time.Since(h.started) > h.wait {
+		return s.flushHoldWith(thinkingSummaryFallback)
+	}
+	return true
+}
+
+func (s *sseParser) flushHold() bool {
+	h := s.hold
+	sum := firstMeaningfulLine(h.text.String())
+	if sum == "" {
+		sum = thinkingSummaryFallback
+	}
+	return s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
+}
+
+func (s *sseParser) flushHoldWith(summary string) bool {
+	h := s.hold
+	s.hold = nil
+	if s.out == nil {
+		return true
+	}
+	if _, err := s.out.Write(withThinkingSummary(h.line, summary)); err != nil {
+		return false
+	}
+	if _, err := s.out.Write([]byte("\n")); err != nil {
+		return false
+	}
+	for _, d := range h.deltas {
+		if _, err := s.out.Write(d); err != nil {
+			return false
+		}
+		if _, err := s.out.Write([]byte("\n")); err != nil {
+			return false
+		}
+	}
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+	return true
+}
+
 func (s *sseParser) Close() bool {
+	if s.hold != nil && !s.flushHold() {
+		return false
+	}
 	if len(s.pending) > 0 {
 		ok := s.emit(s.pending)
 		s.pending = nil

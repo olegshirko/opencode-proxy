@@ -81,12 +81,35 @@ type modelFile struct {
 // effortOrder is the ladder used to pick the highest supported level.
 var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
-// pickerOverrides renames picker ids where the catalog spelling is too long.
-// The value goes after the "claude-" prefix, so "deepseek-v4-pro" becomes
-// "claude-DPV4-Pro". Lowercased, it must be resolvable through the picker
-// table in models.json — which the generator writes — so any spelling works.
+// pickerOverrides renames picker ids. The desktop app validates that a
+// gateway route references an Anthropic model and flags ids carrying vendor
+// names (deepseek, qwen, glm, kimi, ...), so every picker spelling here is
+// vendor-neutral: a short code plus the size/version. Keep them stable —
+// the app profile and the cost table are keyed by these names.
 var pickerOverrides = map[string]string{
-	"deepseek-v4-pro": "DPV4-Pro",
+	"deepseek-v4.1-flash":        "DS41-Flash",
+	"deepseek-v4-pro":            "DPV4-Pro",
+	"glm-5.3":                    "GL-5.3",
+	"glm-5.2":                    "GL-5.2",
+	"glm-5.3-flash":              "GL-5.3-Flash",
+	"gemini-4-argon":             "Argon-4",
+	"kimi-k3":                    "K3",
+	"kimi-k3.1-pro":              "K31-Pro",
+	"kimi-k2.7-code":             "K27-Code",
+	"mimo-v2.6-flash":            "M26-Flash",
+	"mimo-v2.6-pro":              "M26-Pro",
+	"minimax-m3":                 "MM3",
+	"minimax-m3.1-flash":         "MM31-Flash",
+	"qwen3.7-plus":               "Q37-Plus",
+	"qwen3.8-flash":              "Q38-Flash",
+	"qwen3.8-max":                "Q38-Max",
+	"hy3":                        "H3",
+	"longcat-2.0":                "LC-2.0",
+	"grok-4.7":                   "GR-4.7",
+	"gpt-6-luna":                 "Luna-6",
+	"gpt-5.6-luna":               "Luna-5.6",
+	"muse-spark-1.2-contributor": "Spark-1.2",
+	"muse-spark-1.3-contributor": "Spark-1.3",
 }
 
 // FetchCatalog reads the Go model catalog.

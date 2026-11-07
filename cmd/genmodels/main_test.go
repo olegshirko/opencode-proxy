@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -51,8 +52,8 @@ func TestParseCatalog(t *testing.T) {
 
 func TestPickerNameFromID(t *testing.T) {
 	cases := []struct{ id, name, want string }{
-		{"glm-5.3-flash", "GLM 5.3 Flash", "claude-GLM-5.3-Flash"},
-		{"kimi-k2.7-code", "Kimi K2.7 Code", "claude-Kimi-K2.7-Code"},
+		{"glm-5.3-flash", "GLM 5.3 Flash", "claude-GL-5.3-Flash"},
+		{"kimi-k2.7-code", "Kimi K2.7 Code", "claude-K27-Code"},
 		// The display name does not spell the id, so the id is used.
 		{"claude-haiku-5-5", "Claude Haiku 5.5", "claude-claude-haiku-5-5"},
 		// Explicit short spellings win over both the name and the id.
@@ -66,12 +67,13 @@ func TestPickerNameFromID(t *testing.T) {
 }
 
 func TestPickerNameRoundTripsThroughLowercase(t *testing.T) {
-	// The proxy strips the "claude-" prefix and lowercases; that must give the
-	// native id back, otherwise a picked model lands on the wrong upstream id.
+	// Non-overridden pickers must survive the proxy's prefix-strip-and-lowercase
+	// rule: a picked model has to land on its own upstream id.
 	cases := []struct{ id, name string }{
-		{"glm-5.3-flash", "GLM 5.3 Flash"},
-		{"deepseek-v4.1-flash", "DeepSeek V4.1 Flash"},
-		{"qwen3.8-max", "Qwen3.8 Max"},
+		{"hy4", "Hy4"},
+		{"hy4-preview", "Hy4 preview"},
+		{"step-5-preview", "Step 5 Preview"},
+		{"beam-free", "Beam Free"},
 		{"claude-haiku-5-5", "Claude Haiku 5.5"},
 	}
 	for _, c := range cases {
@@ -80,6 +82,59 @@ func TestPickerNameRoundTripsThroughLowercase(t *testing.T) {
 		if back != c.id {
 			t.Errorf("picker %q lowers to %q, want %q", picker, back, c.id)
 		}
+	}
+}
+
+// TestPickerNamesAvoidVendorWords pins the desktop app's validation: a
+// gateway route may not carry another vendor's name, so no picker spelling
+// may contain one.
+func TestPickerNamesAvoidVendorWords(t *testing.T) {
+	ids := []string{
+		"deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3", "glm-5.2",
+		"glm-5.3-flash", "gemini-4-argon", "kimi-k3", "kimi-k3.1-pro",
+		"kimi-k2.7-code", "longcat-2.0", "mimo-v2.6-flash", "mimo-v2.6-pro",
+		"minimax-m3", "minimax-m3.1-flash", "muse-spark-1.2-contributor",
+		"muse-spark-1.3-contributor", "qwen3.7-plus", "qwen3.8-flash",
+		"qwen3.8-max", "grok-4.7", "gpt-6-luna", "gpt-5.6-luna",
+	}
+	vendors := []string{
+		"deepseek", "glm", "gemini", "kimi", "mimo", "minimax",
+		"qwen", "grok", "longcat", "muse", "gpt",
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		picker := strings.ToLower(PickerName(id, id))
+		for _, v := range vendors {
+			if strings.Contains(picker, v) {
+				t.Errorf("PickerName(%q) = %q still names the vendor %q", id, picker, v)
+			}
+		}
+	}
+}
+
+// TestPickerNamesAreUnique guards the picker table: two models must never
+// share a picker spelling, or one of them becomes unreachable.
+func TestPickerNamesAreUnique(t *testing.T) {
+	ids := []string{
+		"deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3", "glm-5.2",
+		"glm-5.3-flash", "gemini-4-argon", "kimi-k3", "kimi-k3.1-pro",
+		"kimi-k2.7-code", "longcat-2.0", "mimo-v2.6-flash", "mimo-v2.6-pro",
+		"minimax-m3", "minimax-m3.1-flash", "muse-spark-1.2-contributor",
+		"muse-spark-1.3-contributor", "qwen3.7-plus", "qwen3.8-flash",
+		"qwen3.8-max", "grok-4.7", "gpt-6-luna", "gpt-5.6-luna",
+		"hy3", "hy4", "hy4-preview", "step-5-preview", "beam-free",
+		"crouton-alpha-free", "iceman-contributor-free", "claude-haiku-5-5",
+	}
+	seen := make(map[string]string, len(ids))
+	for _, id := range ids {
+		picker := strings.ToLower(PickerName(id, id))
+		if prev, dup := seen[picker]; dup {
+			t.Errorf("picker %q is shared by %q and %q", picker, prev, id)
+		}
+		seen[picker] = id
+	}
+	if len(seen) != len(ids) {
+		t.Errorf("got %d unique pickers for %d models", len(seen), len(ids))
 	}
 }
 

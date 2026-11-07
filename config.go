@@ -32,6 +32,9 @@ type SchedulerConfig struct {
 	KeepaliveIntervalMS int  `json:"keepalive_interval_ms"`
 	FallbackAfterMS     int  `json:"fallback_after_ms"`
 	FallbackRotateMain  bool `json:"fallback_rotate_main"`
+	// ThinkingSummaryWaitMS bounds how long a thinking block's start event is
+	// held back while the proxy collects a one-line summary for it.
+	ThinkingSummaryWaitMS int `json:"thinking_summary_wait_ms"`
 }
 
 type LogConfig struct {
@@ -115,8 +118,9 @@ func Defaults() Config {
 			QueueTimeoutMS:      60000,
 			KeepaliveAfterMS:    3000,
 			KeepaliveIntervalMS: 5000,
-			FallbackAfterMS:     20000,
-			FallbackRotateMain:  false,
+			FallbackAfterMS:       20000,
+			FallbackRotateMain:    false,
+			ThinkingSummaryWaitMS: 500,
 		},
 		SessionCostFile: filepath.Join(filepath.Dir(logFile), "session-cost.json"),
 	}
