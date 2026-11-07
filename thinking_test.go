@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStreamThinkingSummaryInjected(t *testing.T) {
@@ -216,5 +218,41 @@ func TestStreamThinkingSummaryWaitDisabled(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "content_block_start") || strings.Contains(body, "summaries") {
 		t.Errorf("hold should be disabled with wait=0:\n%s", body)
+	}
+}
+
+func TestExpireHoldShipsAStartWithoutFurtherData(t *testing.T) {
+	var out bytes.Buffer
+	p := &sseParser{out: &out, summaryWait: time.Hour}
+	line := []byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
+	h := maybeHoldThinkingStart(line, time.Hour)
+	if h == nil {
+		t.Fatal("a thinking start was not held")
+	}
+	p.hold = h
+	h.text.WriteString("Collecting the relevant files")
+
+	p.expireHold(h)
+
+	if p.hold != nil {
+		t.Fatal("the hold survived its timer")
+	}
+	if !strings.Contains(out.String(), `"summary":"Collecting the relevant files"`) {
+		t.Fatalf("the timer did not ship the collected summary:\n%s", out.String())
+	}
+}
+
+func TestCloseEmitsAPendingPartialLine(t *testing.T) {
+	var out bytes.Buffer
+	p := &sseParser{out: &out}
+	p.pending = []byte(`data: {"type":"ping"}`)
+	if !p.Close() {
+		t.Fatal("Close reported a write failure")
+	}
+	if !strings.Contains(out.String(), `"type":"ping"`) {
+		t.Fatalf("the trailing line was dropped:\n%s", out.String())
+	}
+	if p.pending != nil {
+		t.Fatal("pending bytes were not cleared")
 	}
 }

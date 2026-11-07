@@ -912,3 +912,124 @@ func TestAllowanceRefusalLeavesTheCeilingAlone(t *testing.T) {
 		t.Fatalf("cell limit = %d, want 8: a non-prefill 429 says nothing about concurrency", got)
 	}
 }
+
+func TestQueueTimeoutAnswersOverloaded(t *testing.T) {
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(blocked) })
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 50 })
+	h.proxy.SetScheduler(NewCellScheduler(1))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+			strings.NewReader(`{"model":"claude-GLM-5.3","messages":[]}`))
+		h.proxy.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	<-blocked
+
+	rec := h.do(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-GLM-5.3","messages":[]}`, nil)
+	close(release)
+	<-done
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+	if !strings.Contains(rec.Body.String(), "overloaded_error") {
+		t.Fatalf("body is not an Anthropic overloaded_error: %s", rec.Body.String())
+	}
+}
+
+func TestSetCostStoreReplacesTheStore(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {})
+	store, err := NewCostStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.proxy.SetCostStore(store)
+	if h.proxy.costs != store {
+		t.Fatal("SetCostStore did not install the store")
+	}
+}
+
+func TestLimitedBufferTruncatesAndReports(t *testing.T) {
+	lb := &limitedBuffer{max: 4}
+	n, err := lb.Write([]byte("abcdefgh"))
+	if err != nil || n != 8 {
+		t.Fatalf("Write = (%d, %v), want (8, nil): it must report a full write", n, err)
+	}
+	if got := lb.String(); got != "abcd" {
+		t.Fatalf("buffer = %q, want %q", got, "abcd")
+	}
+	if !lb.truncated {
+		t.Fatal("truncation was not recorded")
+	}
+}
+
+func TestPingWriterDelegatesTheResponseWriter(t *testing.T) {
+	rec := httptest.NewRecorder()
+	pw := newPingWriter(rec, time.Hour, &atomic.Int64{})
+
+	pw.Header().Set("X-Test", "1")
+	pw.WriteHeader(http.StatusCreated)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	if got := rec.Header().Get("X-Test"); got != "1" {
+		t.Fatalf("header = %q, want 1", got)
+	}
+	pw.Flush()
+	if pw.Committed() {
+		t.Fatal("an uncommitted writer reported itself committed")
+	}
+}
+
+func TestFillCapturedBodyRecordsTruncation(t *testing.T) {
+	cfg := Defaults()
+	cfg.Log.Capture.ResponseBody = true
+	cfg.Log.MaxBodyBytes = 4
+
+	rec := &CaptureRecord{}
+	fillCapturedBody(rec, &cfg, []byte("abcdefgh"))
+	if rec.ResponseBody != "abcd" {
+		t.Fatalf("captured %q, want abcd", rec.ResponseBody)
+	}
+	if !rec.Truncated {
+		t.Fatal("truncation was not recorded")
+	}
+
+	// A nil record and a disabled capture are both no-ops.
+	fillCapturedBody(nil, &cfg, []byte("abc"))
+	off := Defaults()
+	off.Log.Capture.ResponseBody = false
+	rec2 := &CaptureRecord{}
+	fillCapturedBody(rec2, &off, []byte("abc"))
+	if rec2.ResponseBody != "" {
+		t.Fatalf("captured body %q with capture disabled", rec2.ResponseBody)
+	}
+}
+
+func TestTruncateBodyWithoutALimit(t *testing.T) {
+	text, truncated := truncateBody([]byte("anything"), 0)
+	if text != "anything" || truncated {
+		t.Fatalf("truncateBody = (%q, %v), want the whole body", text, truncated)
+	}
+}
+
+func TestLoaderDefaultsMatchesTheBuiltIns(t *testing.T) {
+	l := testConfig("http://127.0.0.1:1")
+	if got := l.Defaults().Listen; got != Defaults().Listen {
+		t.Fatalf("loader Defaults listen = %q", got)
+	}
+}

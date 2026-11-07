@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -194,5 +197,151 @@ func TestProbeReportsAvailableOnSuccess(t *testing.T) {
 	}
 	if gotModel != "glm-5.3" {
 		t.Errorf("probe sent model %q", gotModel)
+	}
+}
+
+func TestRunWritesTheCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[
+			{"id":"glm-5.3","name":"GLM 5.3","limit":{"context":1000000},
+			 "capabilities":{"reasoning":{"effort":["none","high"]}},
+			 "cost":{"text":{"input":{"price":0.7,"cache":{"read":0.07}},"output":{"price":2.8}}}},
+			{"id":"small-model","name":"Small Model","limit":{"context":256000},
+			 "capabilities":{"reasoning":{"effort":["none"]}},
+			 "cost":{"text":{"input":{"price":0.1},"output":{"price":0.2}}}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "models.json")
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), options{out: out, catalogURL: srv.URL, probeURL: srv.URL},
+		&http.Client{}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got modelFile
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode %s: %v", out, err)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %d, want 2", len(got.Models))
+	}
+	if got.Models[0].ID != "glm-5.3" {
+		t.Fatalf("models are not sorted by label: first is %q", got.Models[0].ID)
+	}
+	big := got.Models[0]
+	if big.Picker != "claude-GL-5.3" {
+		t.Fatalf("picker = %q, want claude-GL-5.3", big.Picker)
+	}
+	if big.BehavesAs != "claude-sonnet-5-5" || !big.Supports1M {
+		t.Fatalf("1M model = %+v", big)
+	}
+	if big.MaxEffort != "high" {
+		t.Fatalf("max effort = %q, want high", big.MaxEffort)
+	}
+	small := got.Models[1]
+	if small.BehavesAs != "claude-sonnet-5" || small.Supports1M {
+		t.Fatalf("256k model = %+v", small)
+	}
+	if !strings.Contains(stdout.String(), "2 models, 2 available") {
+		t.Fatalf("summary = %q", stdout.String())
+	}
+}
+
+func TestRunFailsOnACatalogError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "models.json")
+	err := run(context.Background(), options{out: out, catalogURL: srv.URL},
+		&http.Client{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run accepted a failing catalog")
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatal("run wrote a file despite the catalog error")
+	}
+}
+
+func TestRunRequiresATokenForProbing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"glm-5.3","name":"GLM 5.3"}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENCODE_TOKEN", "")
+
+	err := run(context.Background(), options{
+		out: filepath.Join(t.TempDir(), "models.json"), catalogURL: srv.URL, probe: true,
+	}, &http.Client{}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "needs OPENCODE_TOKEN") {
+		t.Fatalf("err = %v, want a missing-token error", err)
+	}
+}
+
+func TestReadToken(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(nested, []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readToken(nested); got != "secret" {
+		t.Fatalf("readToken(env) = %q, want secret", got)
+	}
+
+	flat := filepath.Join(dir, "flat.json")
+	if err := os.WriteFile(flat, []byte(`{"ANTHROPIC_AUTH_TOKEN":"flat"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readToken(flat); got != "flat" {
+		t.Fatalf("readToken(top level) = %q, want flat", got)
+	}
+
+	if got := readToken(filepath.Join(dir, "missing.json")); got != "" {
+		t.Fatalf("readToken(missing) = %q, want an empty token", got)
+	}
+}
+
+func TestRunMainWritesTheFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[{"id":"glm-5.3","name":"GLM 5.3","limit":{"context":1000000}}]}`))
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "models.json")
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"-out", out, "-catalog", srv.URL}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("no output written: %v", err)
+	}
+}
+
+func TestRunMainReportsACatalogFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"-out", filepath.Join(t.TempDir(), "m.json"),
+		"-catalog", "http://127.0.0.1:1/none"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "genmodels:") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunMainRejectsAnUnknownFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runMain([]string{"-nope"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
 	}
 }

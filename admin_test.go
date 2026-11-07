@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -229,5 +230,115 @@ func TestAdminSessionCostUnknownSessionReturnsZeros(t *testing.T) {
 	}
 	if got := body["session"]; got != "nope" {
 		t.Errorf("session = %v, want the requested id", got)
+	}
+}
+
+func TestAdminModelsResolvesEveryEntry(t *testing.T) {
+	p := newAdminHarness(t)
+	rec := adminDo(t, p, http.MethodGet, "/admin/models", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out struct {
+		Models []struct {
+			ID         string `json:"id"`
+			Picker     string `json:"picker"`
+			ResolvesTo string `json:"resolves_to"`
+			Reason     string `json:"reason"`
+		} `json:"models"`
+		Default    string            `json:"default"`
+		Background string            `json:"background"`
+		Aliases    map[string]string `json:"aliases"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Models) != 2 {
+		t.Fatalf("models = %d, want 2", len(out.Models))
+	}
+	for _, m := range out.Models {
+		if m.ResolvesTo == "" || m.Reason == "" {
+			t.Fatalf("model %s has no resolution: %+v", m.ID, m)
+		}
+	}
+	if out.Models[0].Reason != "picker" {
+		t.Fatalf("first model resolved by %q, want the picker", out.Models[0].Reason)
+	}
+	if out.Default != "deepseek-v4.1-flash" || out.Background != "deepseek-v4.1-flash" {
+		t.Fatalf("default/background = %q/%q", out.Default, out.Background)
+	}
+	if out.Aliases["claude-legacy"] != "glm-5.3" {
+		t.Fatalf("aliases = %v", out.Aliases)
+	}
+}
+
+func TestAdminReloadReturnsTheActiveConfig(t *testing.T) {
+	p := newAdminHarness(t)
+	rec := adminDo(t, p, http.MethodPost, "/admin/reload", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["listen"] == nil || out["upstream"] == nil {
+		t.Fatalf("reload answer is missing the config: %v", out)
+	}
+	if _, leaked := out["admin"]; leaked {
+		if admin, ok := out["admin"].(map[string]any); ok {
+			if tok, _ := admin["token"].(string); tok != "" {
+				t.Fatalf("reload answer leaked the admin token")
+			}
+		}
+	}
+}
+
+func TestAdminPatchConfigAppliesEverySection(t *testing.T) {
+	p := newAdminHarness(t)
+	body := `{
+		"log": {"level": "debug", "max_mb": 3, "keep": 2, "capture": {"request_body": true}},
+		"models": {"default": "glm-5.3", "background": "deepseek-v4.1-flash",
+		           "aliases": {"claude-x": "glm-5.3"}},
+		"retry": {"max_attempts": 3, "first_wait_ms": 7, "multiplier": 1.5,
+		          "max_wait_ms": 9, "total_budget_ms": 11},
+		"admin": {"token": "secret"}
+	}`
+	rec := adminDo(t, p, http.MethodPatch, "/admin/config", body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	cfg := p.cfg.Get()
+	if cfg.Log.Level != "debug" || cfg.Log.MaxMB != 3 || cfg.Log.Keep != 2 {
+		t.Fatalf("log section = %+v", cfg.Log)
+	}
+	if !cfg.Log.Capture.RequestBody {
+		t.Fatal("capture was not enabled")
+	}
+	if cfg.Models.Default != "glm-5.3" || cfg.Models.Aliases["claude-x"] != "glm-5.3" {
+		t.Fatalf("models section = %+v", cfg.Models)
+	}
+	if cfg.Retry.MaxAttempts != 3 || cfg.Retry.FirstWaitMS != 7 ||
+		cfg.Retry.Multiplier != 1.5 || cfg.Retry.MaxWaitMS != 9 || cfg.Retry.TotalBudgetMS != 11 {
+		t.Fatalf("retry section = %+v", cfg.Retry)
+	}
+	if cfg.Admin.Token != "secret" {
+		t.Fatal("admin token was not applied")
+	}
+	// The answer must never echo the token back.
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("patch answer leaked the token: %s", rec.Body.String())
+	}
+}
+
+func TestAdminPatchConfigRejectsBadJSON(t *testing.T) {
+	p := newAdminHarness(t)
+	rec := adminDo(t, p, http.MethodPatch, "/admin/config", `{"log":`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid JSON") {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -225,22 +226,55 @@ func Probe(ctx context.Context, baseURL, token string, m model, hc *http.Client)
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
+// options are the command line flags, kept out of main so the work can be
+// tested without touching the real network or real flags.
+type options struct {
+	out        string
+	probe      bool
+	tokenFile  string
+	catalogURL string
+	probeURL   string
+}
+
 func main() {
-	out := flag.String("out", "models.json", "output file")
-	probe := flag.Bool("probe", false, "probe every model and record availability")
-	tokenFile := flag.String("token-file", "", "JSON file holding an Anthropic token (e.g. ~/.claude/settings.json)")
-	catalogURL := flag.String("catalog", defaultCatalogURL, "catalog endpoint")
-	probeURL := flag.String("probe-url", defaultProbeURL, "base URL for the availability probe")
-	flag.Parse()
+	os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// runMain is the command itself, separated from main so it can be tested.
+func runMain(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("genmodels", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	out := fs.String("out", "models.json", "output file")
+	probe := fs.Bool("probe", false, "probe every model and record availability")
+	tokenFile := fs.String("token-file", "", "JSON file holding an Anthropic token (e.g. ~/.claude/settings.json)")
+	catalogURL := fs.String("catalog", defaultCatalogURL, "catalog endpoint")
+	probeURL := fs.String("probe-url", defaultProbeURL, "base URL for the availability probe")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	hc := &http.Client{Timeout: 90 * time.Second}
+	opts := options{
+		out:        *out,
+		probe:      *probe,
+		tokenFile:  *tokenFile,
+		catalogURL: *catalogURL,
+		probeURL:   *probeURL,
+	}
+	if err := run(ctx, opts, &http.Client{Timeout: 90 * time.Second}, stdout, stderr); err != nil {
+		fmt.Fprintln(stderr, "genmodels:", err)
+		return 1
+	}
+	return 0
+}
 
-	items, err := FetchCatalog(ctx, *catalogURL, hc)
+// run fetches the catalog, optionally probes every model, and writes the
+// models.json the proxy and the app profile generator read.
+func run(ctx context.Context, opts options, hc *http.Client, stdout, stderr io.Writer) error {
+	items, err := FetchCatalog(ctx, opts.catalogURL, hc)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "genmodels:", err)
-		os.Exit(1)
+		return err
 	}
 
 	models := make([]model, 0, len(items))
@@ -249,38 +283,37 @@ func main() {
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].Label < models[j].Label })
 
-	if *probe {
+	if opts.probe {
 		token := os.Getenv("OPENCODE_TOKEN")
-		if token == "" && *tokenFile != "" {
-			token = readToken(*tokenFile)
+		if token == "" && opts.tokenFile != "" {
+			token = readToken(opts.tokenFile)
 		}
 		if token == "" {
-			fmt.Fprintln(os.Stderr, "genmodels: -probe needs OPENCODE_TOKEN or -token-file")
-			os.Exit(1)
+			return fmt.Errorf("-probe needs OPENCODE_TOKEN or -token-file")
 		}
 		for i := range models {
-			models[i].Available = Probe(ctx, *probeURL, token, models[i], hc)
-			fmt.Fprintf(os.Stderr, "probe %-28s %v\n", models[i].ID, models[i].Available)
+			models[i].Available = Probe(ctx, opts.probeURL, token, models[i], hc)
+			fmt.Fprintf(stderr, "probe %-28s %v\n", models[i].ID, models[i].Available)
 		}
 	}
 
 	data, err := json.MarshalIndent(modelFile{Models: models}, "", "  ")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "genmodels:", err)
-		os.Exit(1)
+		return err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(*out, data, 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "genmodels:", err)
-		os.Exit(1)
+	if err := os.WriteFile(opts.out, data, 0o644); err != nil {
+		return err
 	}
+
 	available := 0
 	for _, m := range models {
 		if m.Available {
 			available++
 		}
 	}
-	fmt.Printf("wrote %s: %d models, %d available\n", *out, len(models), available)
+	fmt.Fprintf(stdout, "wrote %s: %d models, %d available\n", opts.out, len(models), available)
+	return nil
 }
 
 // readToken pulls ANTHROPIC_AUTH_TOKEN out of a Claude settings file. It
@@ -297,10 +330,14 @@ func readToken(path string) string {
 		return ""
 	}
 	var doc struct {
-		Env map[string]string `json:"env"`
+		Env   map[string]string `json:"env"`
+		Token string            `json:"ANTHROPIC_AUTH_TOKEN"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return ""
 	}
-	return doc.Env["ANTHROPIC_AUTH_TOKEN"]
+	if tok := doc.Env["ANTHROPIC_AUTH_TOKEN"]; tok != "" {
+		return tok
+	}
+	return doc.Token
 }
