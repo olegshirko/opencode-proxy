@@ -1,169 +1,123 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
+	"errors"
 	"flag"
-	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"strings"
+	"syscall"
+	"time"
 )
 
-// Upstream: opencode.ai Anthropic-compatible inference gateway.
-var upstream = "https://opencode.ai/inference/go/anthropic"
+// defaultConfigPath is used when -config is not given.
+func defaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "config.json"
+	}
+	return filepath.Join(home, "opencode-proxy", "config.json")
+}
 
-// Fallback map used only when model.txt is empty/missing.
-var modelMap = map[string]string{
-	"claude-opus-5":     "deepseek-v4.1-flash",
-	"claude-sonnet-4-5": "deepseek-v4.1-flash",
-	"claude-haiku-5-5":  "deepseek-v4.1-flash",
-	"claude-fable-5":    "deepseek-v4.1-flash",
+// buildRouter wires the admin control plane beside the proxy. Anything under
+// /admin/ stays local; everything else is forwarded upstream.
+func buildRouter(proxy *Proxy) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/admin/", proxy.AdminHandler())
+	// The desktop app probes this before it will use the endpoint.
+	mux.HandleFunc("HEAD /api/hello", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.Handle("/", proxy)
+	return mux
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:4000", "listen address")
-	session := flag.String("session", "my-session-1", "x-opencode-session value")
-	home, _ := os.UserHomeDir()
-	modelfile := flag.String("modelfile", filepath.Join(home, "opencode-proxy", "model.txt"), "file holding the target model name (read on every request)")
-	aliasfile := flag.String("aliasfile", filepath.Join(home, "opencode-proxy", "aliases.txt"), "file mapping client model IDs to upstream models (read on every request)")
-	logfile := flag.String("logfile", filepath.Join(home, "opencode-proxy", "proxy.log"), "log file (appended)")
+	configPath := flag.String("config", defaultConfigPath(), "path to config.json")
+	addr := flag.String("addr", "", "listen address (overrides the config value)")
 	flag.Parse()
 
-	// Log to both the terminal and a file, so the log can be inspected later.
-	if f, err := os.OpenFile(*logfile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-		log.SetOutput(io.MultiWriter(os.Stderr, f))
-		defer f.Close()
+	loader, err := NewConfigLoader(*configPath)
+	if err != nil {
+		log.Fatalf("opencode-proxy: %v", err)
 	}
 
-	client := &http.Client{} // no timeout: streaming responses
+	modelsPath := filepath.Join(filepath.Dir(*configPath), "models.json")
+	registry, err := LoadRegistry(modelsPath)
+	if err != nil {
+		log.Fatalf("opencode-proxy: %v", err)
+	}
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Read the target model on every request, so editing model.txt
-		// takes effect immediately (no rebuild/restart).
-		target := ""
-		if b, err := os.ReadFile(*modelfile); err == nil {
-			target = strings.TrimSpace(string(b))
-		}
-		// aliases.txt maps the model IDs the client sends to real upstream
-		// models, one "alias = target" per line; '#' starts a comment.
-		aliases := map[string]string{}
-		if b, err := os.ReadFile(*aliasfile); err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
-				}
-				if i := strings.Index(line, "="); i > 0 {
-					aliases[strings.TrimSpace(line[:i])] = strings.TrimSpace(line[i+1:])
-				}
-			}
-		}
+	logger, err := NewLogger(loader.Get().Log)
+	if err != nil {
+		log.Fatalf("opencode-proxy: %v", err)
+	}
+	defer logger.Close()
 
-		url := upstream + r.URL.Path
-		if r.URL.RawQuery != "" {
-			url += "?" + r.URL.RawQuery
-		}
-
-		body, err := io.ReadAll(r.Body)
-		r.Body.Close()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// ---- request log (one line per request) ----
-		log.Printf(">>> %s %s (session: %s)", r.Method, r.URL.String(), r.Header.Get("X-Claude-Code-Session-Id"))
-
-		// Rewrite the model id in any JSON body that carries one.
-		if len(body) > 0 && json.Valid(body) {
-			var data map[string]any
-			if json.Unmarshal(body, &data) == nil {
-				if m, ok := data["model"].(string); ok {
-					switch {
-					case aliases[m] != "" && aliases[m] != m:
-						data["model"] = aliases[m]
-						log.Printf("model %q -> %q (from aliases.txt)", m, aliases[m])
-					case target != "" && target != m:
-						data["model"] = target
-						log.Printf("model %q -> %q (from model.txt)", m, target)
-					case modelMap[m] != "" && modelMap[m] != m:
-						data["model"] = modelMap[m]
-						log.Printf("model %q -> %q (from map)", m, modelMap[m])
-					}
-				}
-				if rewritten, err := json.Marshal(data); err == nil {
-					body = rewritten
-				}
-			}
-		}
-
-		req, err := http.NewRequest(r.Method, url, bytes.NewReader(body))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		// Route the gateway's session header off Claude Code's own session id,
-		// so each conversation keeps a stable routing/cache key.
-		ocSession := r.Header.Get("X-Claude-Code-Session-Id")
-		if ocSession == "" {
-			ocSession = *session
-		}
-		req.Header.Set("x-opencode-session", ocSession)
-		for _, h := range []string{"Authorization", "x-api-key", "anthropic-version", "content-type", "user-agent"} {
-			if v := r.Header.Get(h); v != "" {
-				req.Header.Set(h, v)
-			}
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		for k, vs := range resp.Header {
-			for _, v := range vs {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		log.Printf("<<< status: %d", resp.StatusCode)
-
-		if resp.StatusCode >= 400 {
-			errBody, _ := io.ReadAll(resp.Body)
-			log.Printf("<<< error body: %s", string(errBody))
-			w.Write(errBody)
-			return
-		}
-
-		// Stream the body, flushing after each chunk so SSE events reach the
-		// client as they arrive.
-		buf := make([]byte, 32*1024)
-		for {
-			n, rerr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, werr := w.Write(buf[:n]); werr != nil {
-					return
-				}
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-			}
-			if rerr == io.EOF {
-				return
-			}
-			if rerr != nil {
-				return
-			}
-		}
+	cfg := loader.Get()
+	dialer := &net.Dialer{Timeout: time.Duration(cfg.ConnectTimeoutSeconds) * time.Second}
+	proxy := NewProxy(loader, registry, logger, &http.Client{
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			MaxIdleConnsPerHost: 16,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	})
 
-	log.Printf("opencode-proxy: %s -> %s (modelfile: %s)", *addr, upstream, *modelfile)
-	if err := http.ListenAndServe(*addr, handler); err != nil {
-		log.Fatal(err)
+	mux := buildRouter(proxy)
+
+	listen := cfg.Listen
+	if *addr != "" {
+		listen = *addr
 	}
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+
+	// Pick up hand edits to config.json without a restart.
+	stopReload := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopReload:
+				return
+			case <-ticker.C:
+				if err := loader.ReloadIfChanged(); err != nil {
+					log.Printf("opencode-proxy: config reload failed, keeping the last good one: %v", err)
+				}
+			}
+		}
+	}()
+
+	// A relaunch must not cut a streaming response in half: stop accepting new
+	// connections, let in-flight requests finish, then exit.
+	idle := make(chan struct{})
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		log.Printf("opencode-proxy: shutting down, draining in-flight requests")
+		close(stopReload)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("opencode-proxy: drain timed out: %v", err)
+		}
+		close(idle)
+	}()
+
+	log.Printf("opencode-proxy: %s -> %s (models: %d)", listen, cfg.Upstream, len(registry.All()))
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("opencode-proxy: %v", err)
+	}
+	<-idle
+	log.Printf("opencode-proxy: stopped")
 }
