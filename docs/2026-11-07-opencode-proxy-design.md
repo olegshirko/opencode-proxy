@@ -187,6 +187,7 @@ Claude Desktop (профиль «opencode») уже ходит в локальн
 | `GET` | `/admin/models` | реестр native-id + таблица алиасов + как резолвится каждый id |
 | `PUT` | `/admin/models/aliases` | заменить таблицу алиасов целиком |
 | `POST` | `/admin/reload` | перечитать `config.json` с диска |
+| `GET` | `/admin/session-cost?session=<id>` | стоимость по сессии: `usd` (сумма `allowance`), `list_usd` (сумма `list_cost`), число запросов, окно времени и разбивка по моделям. Неизвестная сессия — 200 с нулями |
 
 Примеры:
 

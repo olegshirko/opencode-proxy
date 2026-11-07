@@ -332,6 +332,9 @@ git commit -m "feat: retry policy with jitter and retry-after cap"
   - `func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request)`
   - `func (p *Proxy) Stats() Stats`
   - `type Stats struct { Requests, Retries, Upstream429, InFlight int64 }`
+  - `func (p *Proxy) SessionCost(session string) SessionCost` — нулевая запись для неизвестной сессии
+  - `type SessionCost struct { Session string; USD, ListUSD float64; Requests int; FirstAt, LastAt time.Time; ByModel map[string]ModelCost }`
+  - `type ModelCost struct { USD, ListUSD float64; Requests int }`
 
 - [ ] **Step 1: Тестовый апстрим и падающий тест на подмену модели**
 
@@ -388,12 +391,20 @@ func TestStreamsAndFlushesChunks(t *testing.T)  // апстрим пишет 3 �
 func TestCountTokensCacheHit(t *testing.T)      // два одинаковых count_tokens -> апстрим вызван один раз
 func TestCountTokensSingleflight(t *testing.T)  // два параллельных одинаковых -> один вызов наверх (atomic счётчик)
 func TestExtractsCostAndTokens(t *testing.T)    // usage.opencode.list_cost -> запись лога с cost
+func TestSSECostParsedAcrossChunks(t *testing.T) // событие usage.opencode разрезано между двумя чанками -> стоимость собрана
+func TestSessionCostAggregatesBySession(t *testing.T) // два ответа одной сессии -> Requests=2, суммы сложены, ByModel заполнен
+func TestSessionCostIgnoresRetriesAndFailures(t *testing.T) // попытка с 429 и повтор -> считается только успешная
+func TestSessionCostIgnoresCountTokens(t *testing.T)        // count_tokens не увеличивает Requests
 func TestClientDisconnectAborts(t *testing.T)   // клиент рвёт контекст -> апстрим-запрос отменён, строка с aborted=true
 ```
 
 - [ ] **Step 9: Реализовать стриминг, кэш и извлечение стоимости**
 
-Чтение буфером 32 КБ с `Flush` после каждой записи. Для `/v1/messages/count_tokens` — `sync.Map` с TTL 60 с и `singleflight`-подобной группировкой через `map[string]*inflight` под мьютексом. Для стоимости — для нестриминговых ответов разбираем тело, для стриминговых ищем последний JSON-объект с `usage`. Захват тела ответа — через `io.TeeReader` в буфер с обрезкой по `MaxBodyBytes`.
+Чтение буфером 32 КБ с `Flush` после каждой записи. Для `/v1/messages/count_tokens` — `sync.Map` с TTL 60 с и `singleflight`-подобной группировкой через `map[string]*inflight` под мьютексом. Для стоимости — для нестриминговых ответов разбираем тело, для стриминговых построчно разбираем `data:`-строки через tee и берём **последний** объект с `usage.opencode` (он приходит и в `message_start`, и в `message_delta`; суммировать эти два нельзя — они про один и тот же запрос). Захват тела ответа — через `io.TeeReader` в буфер с обрезкой по `MaxBodyBytes`.
+
+Разбор SSE обязан переживать событие, разрезанное между чанками: буфер строк копится между чтениями, а непарсибельная незавершённая строка остаётся до следующего чанка.
+
+Агрегация по сессиям: ключ — `X-Claude-Code-Session-Id` (он же уходит в `x-opencode-session`). В копилку идёт только финальная успешная попытка: ответ со статусом 2xx. Ретраи, ответы 4xx/5xx и `count_tokens` не учитываются. Хранилище — `map[string]*SessionCost` под мьютексом с TTL (запись без обращений 30 минут удаляется при следующей вставке) и жёстким лимитом 1000 сессий, чтобы память не росла от опроса статус-строки.
 
 - [ ] **Step 10: Прогнать всё и закоммитить**
 
@@ -416,7 +427,17 @@ git commit -m "feat: proxy handler with retries, streaming, token cache and cost
 - Consumes: `Proxy`, `ConfigLoader`, `Registry`, `Logger`.
 - Produces:
   - `func (p *Proxy) AdminHandler() http.Handler`
-  - маршруты: `GET /admin/status`, `GET /admin/config`, `PATCH /admin/config`, `GET|PUT /admin/log/capture`, `GET /admin/models`, `PUT /admin/models/aliases`, `POST /admin/reload`
+  - маршруты: `GET /admin/status`, `GET /admin/config`, `PATCH /admin/config`, `GET|PUT /admin/log/capture`, `GET /admin/models`, `PUT /admin/models/aliases`, `POST /admin/reload`, `GET /admin/session-cost?session=<id>`
+
+Контракт `/admin/session-cost` согласован с соседней сессией, которая рисует строку статуса:
+
+```
+200 {"session":"<uuid>","usd":0.0042,"list_usd":0.0051,"requests":7,
+     "first_at":"2026-11-07T12:00:00Z","last_at":"2026-11-07T12:30:00Z",
+     "by_model":{"deepseek-v4.1-flash":{"usd":0.0042,"list_usd":0.0051,"requests":7}}}
+```
+
+`usd` — сумма `usage.opencode.allowance`, `list_usd` — сумма `usage.opencode.list_cost`. Для неизвестной сессии — **200 с нулями**, не 404.
 
 - [ ] **Step 1: Падающие тесты**
 
@@ -427,6 +448,8 @@ func TestAdminPatchConfigMergesNotReplaces(t *testing.T) // PATCH одного �
 func TestAdminAliasesReplace(t *testing.T)               // PUT заменяет таблицу целиком, старые исчезают
 func TestAdminRequiresTokenWhenSet(t *testing.T)         // token задан -> без заголовка 401, с ним 200
 func TestAdminDisabledReturns404(t *testing.T)           // enabled=false -> 404
+func TestAdminSessionCostShape(t *testing.T)             // совпадает с контрактом: usd, list_usd, requests, first_at, last_at, by_model
+func TestAdminSessionCostUnknownSessionReturnsZeros(t *testing.T) // неизвестная сессия -> 200 и все нули, не 404
 ```
 
 - [ ] **Step 2: Запустить — падает**
