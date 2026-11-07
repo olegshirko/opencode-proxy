@@ -81,6 +81,14 @@ type modelFile struct {
 // effortOrder is the ladder used to pick the highest supported level.
 var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
+// pickerOverrides renames picker ids where the catalog spelling is too long.
+// The value goes after the "claude-" prefix, so "deepseek-v4-pro" becomes
+// "claude-DPV4-Pro". Lowercased, it must be resolvable through the picker
+// table in models.json — which the generator writes — so any spelling works.
+var pickerOverrides = map[string]string{
+	"deepseek-v4-pro": "DPV4-Pro",
+}
+
 // FetchCatalog reads the Go model catalog.
 func FetchCatalog(ctx context.Context, url string, hc *http.Client) ([]catalogModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -112,6 +120,9 @@ func FetchCatalog(ctx context.Context, url string, hc *http.Client) ([]catalogMo
 func PickerName(id, name string) string {
 	if strings.HasPrefix(id, "claude-") {
 		return "claude-" + id
+	}
+	if short, ok := pickerOverrides[id]; ok {
+		return "claude-" + short
 	}
 	if candidate := strings.ReplaceAll(strings.TrimSpace(name), " ", "-"); candidate != "" &&
 		strings.ToLower(candidate) == id {

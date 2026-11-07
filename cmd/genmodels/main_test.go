@@ -52,10 +52,11 @@ func TestParseCatalog(t *testing.T) {
 func TestPickerNameFromID(t *testing.T) {
 	cases := []struct{ id, name, want string }{
 		{"glm-5.3-flash", "GLM 5.3 Flash", "claude-GLM-5.3-Flash"},
-		{"deepseek-v4-pro", "DeepSeek V4 Pro", "claude-DeepSeek-V4-Pro"},
 		{"kimi-k2.7-code", "Kimi K2.7 Code", "claude-Kimi-K2.7-Code"},
 		// The display name does not spell the id, so the id is used.
 		{"claude-haiku-5-5", "Claude Haiku 5.5", "claude-claude-haiku-5-5"},
+		// Explicit short spellings win over both the name and the id.
+		{"deepseek-v4-pro", "DeepSeek V4 Pro", "claude-DPV4-Pro"},
 	}
 	for _, c := range cases {
 		if got := PickerName(c.id, c.name); got != c.want {
