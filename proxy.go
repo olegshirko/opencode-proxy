@@ -199,6 +199,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		session = cfg.SessionFallback
 	}
 	cell, agent, class, prio := cellKey(r, session)
+	cell = p.sched.EffectiveKey(cell, prio, cfg.Scheduler.FallbackRotateMain,
+		time.Duration(cfg.Scheduler.FallbackAfterMS)*time.Millisecond)
 	var waited time.Duration
 
 	var (
@@ -300,13 +302,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Streaming requests own their retry loop, because a client that sees no
 	// bytes assumes the stream died. serveStream keeps it fed with pings.
 	if streamReq {
-		status, attempts, acc, aborted = p.serveStream(ctx, w, cfg, base, body, modelIn, capture)
+		status, attempts, acc, aborted = p.serveStream(ctx, w, cfg, base, body, modelIn, capture, cell)
 		return
 	}
 
 	if r.Method == http.MethodPost && r.URL.Path == "/v1/messages/count_tokens" {
 		billable = false
-		res, err := p.countTokens(ctx, cfg, base, body)
+		res, err := p.countTokens(ctx, cfg, base, body, cell)
 		if err != nil {
 			if aborted = ctx.Err() != nil; !aborted {
 				http.Error(w, err.Error(), http.StatusBadGateway)
@@ -330,7 +332,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, n, err := p.doAttempts(ctx, cfg, func() (*http.Request, error) {
 		return cloneRequestBody(ctx, base, body), nil
-	})
+	}, cell)
 	attempts = n
 	if err != nil {
 		if aborted = ctx.Err() != nil; !aborted {
@@ -400,7 +402,7 @@ func copyHeaders(dst, src http.Header) {
 // attempt count or the total wait budget is exhausted. It returns the final
 // response (whose headers have not been written to the client yet) and the
 // number of attempts made.
-func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*http.Request, error)) (*http.Response, int, error) {
+func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*http.Request, error), cell string) (*http.Response, int, error) {
 	policy := NewRetryPolicy(cfg.Retry, nil)
 	maxAttempts := cfg.Retry.MaxAttempts
 	if maxAttempts < 1 {
@@ -420,6 +422,11 @@ func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*htt
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			p.upstream429.Add(1)
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			p.sched.ReportSuccess(cell)
+		} else if ShouldRetry(resp.StatusCode) {
+			p.sched.ReportFailure(cell)
 		}
 		if !ShouldRetry(resp.StatusCode) || attempt >= maxAttempts {
 			return resp, attempt, nil
@@ -926,11 +933,11 @@ func tokenCacheKey(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (p *Proxy) countTokens(ctx context.Context, cfg *Config, base *http.Request, body []byte) (*cachedResponse, error) {
+func (p *Proxy) countTokens(ctx context.Context, cfg *Config, base *http.Request, body []byte, cell string) (*cachedResponse, error) {
 	return p.tokens.getOrLoad(ctx, tokenCacheKey(body), func() (*cachedResponse, error) {
 		resp, attempts, err := p.doAttempts(ctx, cfg, func() (*http.Request, error) {
 			return cloneRequestBody(ctx, base, body), nil
-		})
+		}, cell)
 		if err != nil {
 			return nil, err
 		}

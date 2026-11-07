@@ -131,3 +131,49 @@ func TestSchedulerReleaseIsIdempotent(t *testing.T) {
 	}
 	rel()
 }
+
+func TestEffectiveKeyRotatesForSubagentAfterWindow(t *testing.T) {
+	s := NewCellScheduler(4)
+	key := "s:1:a:x"
+
+	if got := s.EffectiveKey(key, PrioritySubagent, false, 50*time.Millisecond); got != key {
+		t.Fatalf("healthy cell rotated: %q", got)
+	}
+	s.ReportFailure(key)
+	if got := s.EffectiveKey(key, PrioritySubagent, false, 50*time.Millisecond); got != key {
+		t.Fatalf("rotated before the fallback window elapsed: %q", got)
+	}
+	time.Sleep(70 * time.Millisecond)
+	got := s.EffectiveKey(key, PrioritySubagent, false, 50*time.Millisecond)
+	if got == key {
+		t.Fatal("cell that kept failing was never rotated")
+	}
+	if len(got) <= len(key) || got[:len(key)] != key {
+		t.Fatalf("rotated key %q does not extend %q", got, key)
+	}
+}
+
+func TestEffectiveKeyLeavesMainAloneByDefault(t *testing.T) {
+	s := NewCellScheduler(4)
+	key := "s:1"
+	s.ReportFailure(key)
+	time.Sleep(20 * time.Millisecond)
+
+	if got := s.EffectiveKey(key, PriorityMain, false, 10*time.Millisecond); got != key {
+		t.Fatalf("main cell rotated without permission: %q", got)
+	}
+	if got := s.EffectiveKey(key, PriorityMain, true, 10*time.Millisecond); got == key {
+		t.Fatalf("main cell did not rotate when allowed: %q", got)
+	}
+}
+
+func TestReportSuccessClearsRotationState(t *testing.T) {
+	s := NewCellScheduler(4)
+	key := "s:1:a:y"
+	s.ReportFailure(key)
+	time.Sleep(20 * time.Millisecond)
+	s.ReportSuccess(key)
+	if got := s.EffectiveKey(key, PrioritySubagent, false, 10*time.Millisecond); got != key {
+		t.Fatalf("rotated after a success: %q", got)
+	}
+}

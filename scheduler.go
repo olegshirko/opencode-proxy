@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,58 @@ type CellScheduler struct {
 	queueWaitMS atomic.Int64
 
 	dispatchSignal func()
+
+	// health tracks how long a cell has been refusing, so a stuck chain can be
+	// moved to a fresh cell instead of waiting forever.
+	health map[string]*cellHealth
+}
+
+type cellHealth struct {
+	firstFailure time.Time
+	rotation     int
+}
+
+// ReportFailure records that a cell answered with a retryable status.
+func (s *CellScheduler) ReportFailure(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.health[key]
+	if h == nil {
+		h = &cellHealth{firstFailure: time.Now()}
+		s.health[key] = h
+	}
+}
+
+// ReportSuccess clears a cell's failure history.
+func (s *CellScheduler) ReportSuccess(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.health, key)
+}
+
+// EffectiveKey returns the key a request should use. When the cell has been
+// refusing for longer than fallbackAfter, a rotating suffix is added so the
+// chain gets a different cell. The main chain only rotates when allowMain is
+// set, because a new cell means a cold prompt cache.
+func (s *CellScheduler) EffectiveKey(key string, priority int, allowMain bool, fallbackAfter time.Duration) string {
+	if fallbackAfter <= 0 {
+		return key
+	}
+	if priority == PriorityMain && !allowMain {
+		return key
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.health[key]
+	if h == nil || time.Since(h.firstFailure) < fallbackAfter {
+		if h == nil {
+			return key
+		}
+		return key
+	}
+	h.rotation++
+	h.firstFailure = time.Now()
+	return key + ":r" + strconv.Itoa(h.rotation+1)
 }
 
 // NewCellScheduler builds a scheduler. A maxConcurrent below 1 is treated as 1.
@@ -52,6 +105,7 @@ func NewCellScheduler(maxConcurrent int) *CellScheduler {
 	return &CellScheduler{
 		maxConcurrent: maxConcurrent,
 		cells:         make(map[string]int),
+		health:        make(map[string]*cellHealth),
 	}
 }
 

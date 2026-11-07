@@ -123,7 +123,7 @@ func (pw *pingWriter) StopPings() {
 // stays silent past keepalive_after_ms, or answers with a retryable status,
 // the client is switched to a committed SSE stream and receives pings until
 // the real response (or a terminal error event) arrives.
-func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Config, base *http.Request, body []byte, modelIn string, capture *CaptureRecord) (int, int, usageAccumulator, bool) {
+func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Config, base *http.Request, body []byte, modelIn string, capture *CaptureRecord, cell string) (int, int, usageAccumulator, bool) {
 	kaAfter := time.Duration(cfg.Scheduler.KeepaliveAfterMS) * time.Millisecond
 	kaInterval := time.Duration(cfg.Scheduler.KeepaliveIntervalMS) * time.Millisecond
 	if kaInterval <= 0 {
@@ -198,6 +198,7 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Con
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			p.sched.ReportSuccess(cell)
 			pw.StopPings()
 			if capture != nil && cfg.Log.Capture.ResponseHeaders {
 				capture.ResponseHeaders = maskHeaders(resp.Header)
@@ -212,6 +213,9 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Con
 		}
 
 		retryable := ShouldRetry(resp.StatusCode)
+		if retryable {
+			p.sched.ReportFailure(cell)
+		}
 		var wait time.Duration
 		if retryable {
 			wait = policy.WaitFor(attempt, parseRetryAfter(resp.Header.Get("Retry-After")))
