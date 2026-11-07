@@ -1,0 +1,11 @@
+# Модель, которую шлёт Claude Code = реальная модель на opencode.ai
+# Формат: alias = target   (# — комментарий)
+# Читается на каждый запрос: править можно без перезапуска прокси.
+
+claude-v4.1-flash = deepseek-v4.1-flash
+claude-v151-flash = deepseek-v4.1-flash
+
+# примеры других моделей opencode.ai:
+# claude-qwen-max = qwen3.8-max
+# claude-kimi     = kimi-k3
+# claude-minimax  = minimax-m3

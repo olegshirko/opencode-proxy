@@ -1,0 +1,6 @@
+.venv/
+proxy.log
+*.jsonl
+opencode-proxy
+.superpowers/
+.DS_Store
