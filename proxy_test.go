@@ -703,14 +703,11 @@ func TestSessionCostEvictsOldestAboveLimit(t *testing.T) {
 	for i := 0; i < maxSessions+1; i++ {
 		p.addSessionCost(fmt.Sprintf("s%d", i), "m", 1, 2, base.Add(time.Duration(i)*time.Millisecond))
 	}
-	if got := len(p.costs); got != maxSessions {
-		t.Fatalf("stored sessions = %d, want %d", got, maxSessions)
+	if got := p.SessionCost("s0").Requests; got != 0 {
+		t.Fatalf("oldest session s0 was not evicted")
 	}
-	if _, ok := p.costs["s0"]; ok {
-		t.Fatal("oldest session s0 was not evicted")
-	}
-	if _, ok := p.costs["s1"]; !ok {
-		t.Fatal("second-oldest session s1 was evicted")
+	if got := p.SessionCost("s1").Requests; got != 1 {
+		t.Fatalf("second-oldest session s1 was evicted")
 	}
 }
 

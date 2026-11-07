@@ -70,6 +70,17 @@ func main() {
 
 	mux := buildRouter(proxy)
 
+	// Session cost must survive a relaunch: the desktop session outlives the
+	// proxy process, so a zeroed counter would read as a bug.
+	costs, err := NewCostStore(cfg.SessionCostFile)
+	if err != nil {
+		log.Fatalf("opencode-proxy: %v", err)
+	}
+	proxy.SetCostStore(costs)
+	flushCtx, stopFlush := context.WithCancel(context.Background())
+	defer stopFlush()
+	costs.StartFlusher(flushCtx, 5*time.Second)
+
 	listen := cfg.Listen
 	if *addr != "" {
 		listen = *addr
@@ -112,6 +123,10 @@ func main() {
 			log.Printf("opencode-proxy: drain timed out: %v", err)
 		}
 		close(idle)
+		stopFlush()
+		if err := costs.Flush(); err != nil {
+			log.Printf("opencode-proxy: cost flush on exit failed: %v", err)
+		}
 	}()
 
 	log.Printf("opencode-proxy: %s -> %s (models: %d)", listen, cfg.Upstream, len(registry.All()))

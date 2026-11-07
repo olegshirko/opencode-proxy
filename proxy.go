@@ -63,8 +63,7 @@ type Proxy struct {
 
 	tokens tokenCache
 
-	costMu sync.Mutex
-	costs  map[string]*SessionCost
+	costs *CostStore
 
 	// onRecord observes every logged record. It is a test seam; production
 	// code leaves it nil.
@@ -75,14 +74,21 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client
 	if client == nil {
 		client = &http.Client{}
 	}
+	store, _ := NewCostStore("")
 	return &Proxy{
 		cfg:    cfg,
 		reg:    reg,
 		log:    log,
 		client: client,
 		tokens: newTokenCache(),
-		costs:  make(map[string]*SessionCost),
+		costs:  store,
 	}
+}
+
+// SetCostStore swaps the cost store, which main uses to give the proxy a
+// persistent one.
+func (p *Proxy) SetCostStore(s *CostStore) {
+	p.costs = s
 }
 
 // Stats returns the current counters.
@@ -98,53 +104,11 @@ func (p *Proxy) Stats() Stats {
 // SessionCost returns a copy of the cost record for session. An unknown
 // session yields a zero record rather than an error.
 func (p *Proxy) SessionCost(session string) SessionCost {
-	p.costMu.Lock()
-	defer p.costMu.Unlock()
-
-	sc, ok := p.costs[session]
-	if !ok {
-		return SessionCost{Session: session, ByModel: map[string]ModelCost{}}
-	}
-	out := *sc
-	out.ByModel = make(map[string]ModelCost, len(sc.ByModel))
-	for model, mc := range sc.ByModel {
-		out.ByModel[model] = mc
-	}
-	return out
+	return p.costs.Get(session)
 }
 
 func (p *Proxy) addSessionCost(session, model string, allowance, listCost float64, now time.Time) {
-	p.costMu.Lock()
-	defer p.costMu.Unlock()
-
-	sc := p.costs[session]
-	if sc == nil {
-		sc = &SessionCost{Session: session, FirstAt: now, ByModel: make(map[string]ModelCost)}
-		p.costs[session] = sc
-	}
-	sc.USD += allowance
-	sc.ListUSD += listCost
-	sc.Requests++
-	sc.LastAt = now
-
-	if model != "" {
-		mc := sc.ByModel[model]
-		mc.USD += allowance
-		mc.ListUSD += listCost
-		mc.Requests++
-		sc.ByModel[model] = mc
-	}
-
-	for len(p.costs) > maxSessions {
-		oldestKey := ""
-		var oldest time.Time
-		for key, v := range p.costs {
-			if oldestKey == "" || v.LastAt.Before(oldest) {
-				oldestKey, oldest = key, v.LastAt
-			}
-		}
-		delete(p.costs, oldestKey)
-	}
+	p.costs.Add(session, model, allowance, listCost, now)
 }
 
 var requestIDCounter atomic.Uint64

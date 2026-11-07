@@ -20,6 +20,7 @@ type Config struct {
 	Retry                 RetryConfig  `json:"retry"`
 	Admin                 AdminConfig  `json:"admin"`
 	ConnectTimeoutSeconds int          `json:"connect_timeout_seconds"`
+	SessionCostFile       string       `json:"session_cost_file"`
 }
 
 type LogConfig struct {
@@ -98,6 +99,7 @@ func Defaults() Config {
 			Token:   "",
 		},
 		ConnectTimeoutSeconds: 15,
+		SessionCostFile:       filepath.Join(filepath.Dir(logFile), "session-cost.json"),
 	}
 }
 
