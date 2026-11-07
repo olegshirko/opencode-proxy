@@ -1,0 +1,39 @@
+{
+  "listen": "127.0.0.1:4000",
+  "upstream": "https://opencode.ai/inference/go/anthropic",
+  "session_fallback": "my-session-1",
+  "log": {
+    "file": "/Users/oleg/opencode-proxy/proxy.log",
+    "level": "info",
+    "max_mb": 10,
+    "keep": 5,
+    "capture": {
+      "request_headers": false,
+      "request_body": false,
+      "response_headers": false,
+      "response_body": false
+    },
+    "max_body_bytes": 65536
+  },
+  "models": {
+    "default": "deepseek-v4.1-flash",
+    "background": "deepseek-v4.1-flash",
+    "aliases": {
+      "claude-v4.1-flash": "deepseek-v4.1-flash",
+      "claude-v151-flash": "deepseek-v4.1-flash",
+      "claude-sonnet-5": "deepseek-v4.1-flash"
+    }
+  },
+  "retry": {
+    "max_attempts": 5,
+    "first_wait_ms": 2000,
+    "multiplier": 2,
+    "max_wait_ms": 15000,
+    "total_budget_ms": 60000
+  },
+  "admin": {
+    "enabled": true,
+    "token": ""
+  },
+  "connect_timeout_seconds": 15
+}
