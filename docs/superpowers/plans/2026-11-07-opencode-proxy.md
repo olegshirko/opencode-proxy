@@ -404,7 +404,7 @@ func TestClientDisconnectAborts(t *testing.T)   // клиент рвёт кон�
 
 Разбор SSE обязан переживать событие, разрезанное между чанками: буфер строк копится между чтениями, а непарсибельная незавершённая строка остаётся до следующего чанка.
 
-Агрегация по сессиям: ключ — `X-Claude-Code-Session-Id` (он же уходит в `x-opencode-session`). В копилку идёт только финальная успешная попытка: ответ со статусом 2xx. Ретраи, ответы 4xx/5xx и `count_tokens` не учитываются. Хранилище — `map[string]*SessionCost` под мьютексом с TTL (запись без обращений 30 минут удаляется при следующей вставке) и жёстким лимитом 1000 сессий, чтобы память не росла от опроса статус-строки.
+Агрегация по сессиям: ключ — `X-Claude-Code-Session-Id` (он же уходит в `x-opencode-session`). В копилку идёт только финальная успешная попытка: ответ со статусом 2xx. Ретраи, ответы 4xx/5xx и `count_tokens` не учитываются. Хранилище — `map[string]*SessionCost` под мьютексом. **TTL нет**: вытеснение идёт по `last_at`, когда записей становится больше 1000 — удаляются самые давние. TTL здесь вреден: сессию могут оставить на ночь и вернуться утром, а обнулившаяся цифра выглядит как поломка, а не как истёкший кэш.
 
 - [ ] **Step 10: Прогнать всё и закоммитить**
 
@@ -650,6 +650,69 @@ git commit -m "feat: launchd service and make targets"
 ```
 
 ---
+
+### Task 11: Сохранение стоимости сессий
+
+**Files:**
+- Create: `cost_store.go`, `cost_store_test.go`
+- Modify: `config.go` (new field), `proxy.go` (use the store), `main.go` (load and flush)
+
+**Interfaces:**
+- Consumes: `SessionCost`, `ModelCost` from Task 5; `Config` from Task 1.
+- Produces:
+  - `type CostStore struct { ... }`
+  - `func NewCostStore(path string) (*CostStore, error)` — loads the file if present, tolerates a missing one
+  - `func (s *CostStore) Add(session, model string, usd, listUSD float64, at time.Time)`
+  - `func (s *CostStore) Get(session string) SessionCost`
+  - `func (s *CostStore) Flush() error` — atomic temp file + rename
+  - `func (s *CostStore) StartFlusher(ctx context.Context, every time.Duration)` — writes only when the state changed since the last flush
+  - new config field `session_cost_file`, default `~/opencode-proxy/session-cost.json`
+
+File format:
+
+```json
+{"version":1,"sessions":{"<id>":{"usd":0.0042,"list_usd":0.0051,"requests":7,
+ "first_at":"2026-11-07T12:00:00Z","last_at":"2026-11-07T12:30:00Z",
+ "by_model":{"deepseek-v4.1-flash":{"usd":0.0042,"list_usd":0.0051,"requests":7}}}}}
+```
+
+- [ ] **Step 1: Написать падающие тесты**
+
+```go
+func TestCostStoreRoundTrip(t *testing.T)              // Add -> Flush -> NewCostStore(path) -> Get отдаёт те же суммы
+func TestCostStoreMissingFileIsEmpty(t *testing.T)     // нет файла -> пустое хранилище, без ошибки
+func TestCostStoreEvictsOldestByLastAt(t *testing.T)   // 1001 запись -> осталось 1000, выброшена самая старая по last_at
+func TestCostStoreFlushIsAtomic(t *testing.T)          // целевой путь недоступен -> прежний файл не испорчен
+func TestCostStoreFlusherWritesOnlyOnChange(t *testing.T) // StartFlusher без изменений не трогает mtime
+```
+
+- [ ] **Step 2: Запустить — падает**
+
+Run: `go test ./... -run TestCostStore`
+Expected: FAIL — `undefined: NewCostStore`
+
+- [ ] **Step 3: Реализовать `cost_store.go`**
+
+Мьютекс вокруг map и флага `dirty`. `Add` обновляет `FirstAt` только у новой записи, `LastAt` — всегда, и выставляет `dirty`. `Flush` сериализует под замком, затем пишет вне замка через temp-файл в том же каталоге и `os.Rename`; при ошибке записи `dirty` остаётся выставленным.
+
+- [ ] **Step 4: Прогнать тесты**
+
+Run: `go test ./... -run TestCostStore -v`
+Expected: PASS
+
+- [ ] **Step 5: Подключить к прокси и `main.go`**
+
+`Proxy` получает `*CostStore` вместо собственной map из Task 5 (сама map переезжает сюда). `main.go` создаёт хранилище, вызывает `StartFlusher` с интервалом 5 с и делает финальный `Flush` при завершении по сигналу.
+
+- [ ] **Step 6: Прогнать всё под `-race` и закоммитить**
+
+Run: `go test ./... -race`
+Expected: PASS
+
+```bash
+git add cost_store.go cost_store_test.go proxy.go config.go main.go
+git commit -m "feat: persist per-session cost across restarts"
+```
 
 ## Self-Review
 
