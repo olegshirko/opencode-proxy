@@ -47,7 +47,7 @@
     },
     {
       "id": "deepseek-v4-pro",
-      "picker": "claude-DeepSeek-V4-Pro",
+      "picker": "claude-DPV4-Pro",
       "label": "DeepSeek V4 Pro",
       "behaves_as": "claude-sonnet-5-5",
       "max_effort": "max",
