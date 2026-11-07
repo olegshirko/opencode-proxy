@@ -8,15 +8,45 @@ Usage:
 
 The script never invents models: it reads ../models.json, keeps only entries
 with "available": true, and leaves every key it does not own untouched.
+
+The target profile is the one whose inferenceGatewayBaseUrl points at this
+proxy, not whatever configLibrary/_meta.json calls applied: writing the model
+list into some other profile (another gateway) is silently useless.
 """
 import json
 import os
 import shutil
 import sys
+from urllib.parse import urlsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODELS = os.path.abspath(os.path.join(HERE, "..", "..", "..", "models.json"))
+ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+MODELS = os.path.join(ROOT, "models.json")
+CONFIG = os.path.join(ROOT, "config.json")
 LIBRARY = os.path.expanduser("~/Library/Application Support/Claude-3p/configLibrary")
+
+LOOPBACK = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def proxy_endpoint():
+    """The host:port the proxy listens on, as this proxy's own config has it."""
+    try:
+        with open(CONFIG) as f:
+            listen = (json.load(f).get("listen") or "127.0.0.1:4000").strip()
+    except OSError:
+        listen = "127.0.0.1:4000"
+    host, _, port = listen.rpartition(":")
+    return host or "127.0.0.1", port or "80"
+
+
+def endpoint(url):
+    """(host, port) of a base URL, with loopback spellings unified."""
+    parts = urlsplit(url or "")
+    host = (parts.hostname or "").lower()
+    if host in LOOPBACK:
+        host = "127.0.0.1"
+    port = str(parts.port or (443 if parts.scheme == "https" else 80))
+    return host, port
 
 
 def load_models():
@@ -28,18 +58,69 @@ def load_models():
     return models
 
 
+def profiles():
+    """Every configLibrary entry that looks like a profile, by path."""
+    try:
+        names = os.listdir(LIBRARY)
+    except OSError:
+        return []
+    out = []
+    for name in sorted(names):
+        if not name.endswith(".json") or name.startswith("_"):
+            continue
+        path = os.path.join(LIBRARY, name)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if "inferenceGatewayBaseUrl" in data:
+            out.append((path, data))
+    return out
+
+
 def active_profile(explicit):
     if explicit:
         return explicit
-    with open(os.path.join(LIBRARY, "_meta.json")) as f:
-        meta = json.load(f)
-    applied = meta.get("appliedId")
-    if not applied:
-        sys.exit("configLibrary/_meta.json has no appliedId")
-    return os.path.join(LIBRARY, applied + ".json")
+
+    want = proxy_endpoint()
+    found = [(path, data) for path, data in profiles()
+             if endpoint(data.get("inferenceGatewayBaseUrl")) == want]
+    if not found:
+        listing = ", ".join(f"{os.path.basename(p)} -> {d.get('inferenceGatewayBaseUrl')}"
+                            for p, d in profiles()) or "none"
+        sys.exit(f"no profile points at the proxy {want[0]}:{want[1]}; "
+                 f"profiles: {listing}")
+
+    try:
+        with open(os.path.join(LIBRARY, "_meta.json")) as f:
+            applied = json.load(f).get("appliedId")
+    except (OSError, ValueError):
+        applied = None
+
+    for path, data in found:
+        if applied and os.path.basename(path) == applied + ".json":
+            return path
+    if len(found) == 1:
+        return found[0][0]
+    sys.exit("more than one profile points at the proxy: "
+             + ", ".join(os.path.basename(p) for p, _ in found)
+             + "; pass --profile PATH")
 
 
-def build(models):
+def default_model_id():
+    try:
+        with open(CONFIG) as f:
+            return (json.load(f).get("models") or {}).get("default")
+    except OSError:
+        return None
+
+
+def build(models, default_id=None):
+    # The app makes the first inferenceModels entry the default model, so the
+    # proxy's configured default has to come first.
+    if default_id:
+        models = sorted(models, key=lambda m: m["id"] != default_id)
     entries, prices = [], []
     for m in models:
         entry = {
@@ -76,8 +157,15 @@ def main():
         explicit = args[args.index("--profile") + 1]
 
     models = load_models()
-    entries, prices = build(models)
+    default = default_model_id()
+    entries, prices = build(models, default)
     path = active_profile(explicit)
+
+    # The picker name for the default, for the report.
+    pickers = {m["id"]: m["picker"] for m in models}
+    default_picker = pickers.get(default)
+    if default and not default_picker:
+        print(f"warning: config default {default} is not an available model", file=sys.stderr)
 
     with open(path) as f:
         profile = json.load(f)
@@ -93,6 +181,7 @@ def main():
 
     print(json.dumps({"profile": path,
                       "models": len(entries),
+                      "default": default_picker or default,
                       "before": len(profile.get("inferenceModels", [])),
                       "after": len(entries)}, indent=2))
     for key in sorted(updated):

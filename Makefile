@@ -28,14 +28,15 @@ smoke: build
 install: test smoke
 	@mv $(NEW) $(BIN)
 	@sed -e 's|__HOME__|$(HOME)|g' -e 's|__BIN__|$(BIN)|g' \
-		deploy/ai.opencode.proxy.plist.template > $(PLIST)
-	@launchctl bootout gui/$(UID)/$(LABEL) 2>/dev/null || true
-	@launchctl bootstrap gui/$(UID) $(PLIST)
+		deploy/ai.opencode.proxy.plist.template > $(PLIST).new
+	@if cmp -s $(PLIST).new $(PLIST); then rm -f $(PLIST).new; \
+	else mv $(PLIST).new $(PLIST); touch $(PLIST).changed; fi
+	@sh ./scripts/restart.sh
 	@echo "installed $(BIN); run: make verify"
 
 # Relaunches the installed binary. In-flight requests drain first.
 restart:
-	@launchctl kickstart -k gui/$(UID)/$(LABEL)
+	@sh ./scripts/restart.sh
 
 uninstall:
 	@launchctl bootout gui/$(UID)/$(LABEL) 2>/dev/null || true

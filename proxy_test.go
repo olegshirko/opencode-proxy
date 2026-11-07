@@ -480,6 +480,50 @@ func TestCountTokensCacheHit(t *testing.T) {
 	}
 }
 
+func TestCountTokensDoesNotWaitForACell(t *testing.T) {
+	// The app counts tokens constantly. Those calls must not queue behind a
+	// streaming answer: they prefill nothing, so they hold no cell at all.
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/count_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"input_tokens":7}`))
+			return
+		}
+		once.Do(func() { close(blocked) })
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 2000 })
+	h.proxy.SetScheduler(NewCellScheduler(1))
+
+	mainDone := make(chan struct{})
+	go func() {
+		defer close(mainDone)
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+			strings.NewReader(`{"model":"claude-GLM-5.3","messages":[]}`))
+		h.proxy.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	<-blocked
+
+	start := time.Now()
+	rec := h.do(t, http.MethodPost, "/v1/messages/count_tokens",
+		`{"model":"claude-GLM-5.3","messages":[{"role":"user","content":"hi"}]}`, nil)
+	took := time.Since(start)
+	close(release)
+	<-mainDone
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("count_tokens status = %d, want 200", rec.Code)
+	}
+	if took > 500*time.Millisecond {
+		t.Fatalf("count_tokens waited %s behind a busy cell; it must not take one", took)
+	}
+}
+
 func TestCountTokensSingleflight(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
@@ -821,5 +865,50 @@ func TestClientDisconnectAborts(t *testing.T) {
 	}
 	if got := h.proxy.Stats().InFlight; got != 0 {
 		t.Errorf("InFlight = %d, want 0", got)
+	}
+}
+
+func TestPrefillRefusalTightensTheCeiling(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"prefill_cap_refused, retry after 30 s"}}`))
+	}, withRetry(RetryConfig{MaxAttempts: 1, TotalBudgetMS: 1}))
+	h.proxy.SetScheduler(NewCellScheduler(8))
+
+	rec := h.do(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-GLM-5.3","messages":[]}`, nil)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := h.proxy.sched.Limit(); got != 7 {
+		t.Fatalf("cell limit = %d, want 7 after one prefill refusal", got)
+	}
+	if got := h.proxy.Stats().PrefillRefusals; got != 1 {
+		t.Fatalf("prefill refusals = %d, want 1", got)
+	}
+	// The body must still reach the client untouched after being inspected.
+	if !strings.Contains(rec.Body.String(), "prefill_cap_refused") {
+		t.Fatalf("upstream body was altered: %q", rec.Body.String())
+	}
+}
+
+func TestAllowanceRefusalLeavesTheCeilingAlone(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"monthly allowance exhausted"}}`))
+	}, withRetry(RetryConfig{MaxAttempts: 1, TotalBudgetMS: 1}))
+	h.proxy.SetScheduler(NewCellScheduler(8))
+
+	rec := h.do(t, http.MethodPost, "/v1/messages",
+		`{"model":"claude-GLM-5.3","messages":[]}`, nil)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := h.proxy.sched.Limit(); got != 8 {
+		t.Fatalf("cell limit = %d, want 8: a non-prefill 429 says nothing about concurrency", got)
 	}
 }

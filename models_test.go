@@ -39,6 +39,10 @@ func TestResolve(t *testing.T) {
 		{"deepseek-v4.1-flash", "deepseek-v4.1-flash", "native"},
 		{"claude-sonnet-5", "deepseek-v4.1-flash", "default"},
 		{"claude-opus-5", "deepseek-v4.1-flash", "default"},
+		// The desktop app marks 1M-context runs with a [1m] suffix.
+		{"claude-GLM-5.3[1m]", "glm-5.3", "picker"},
+		{"claude-glm-5.3[1M]", "glm-5.3", "picker"},
+		{"deepseek-v4.1-flash[1m]", "deepseek-v4.1-flash", "native"},
 		{"", "deepseek-v4.1-flash", "default"},
 	}
 	for _, c := range cases {

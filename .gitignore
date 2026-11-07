@@ -8,3 +8,5 @@ bin/
 *.bak
 service.*.log
 session-cost.json
+*.jsonl.*
+session-cost.json.tmp-*

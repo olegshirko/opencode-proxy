@@ -21,18 +21,24 @@ const (
 	tokenCacheTTL  = 60 * time.Second
 	maxSessions    = 1000
 	copyBufferSize = 32 * 1024
+	// countTokensConcurrency is how many token counts may run at once. They
+	// are cheap and never prefill, but an unbounded burst would still compete
+	// with real requests for the gateway's capacity.
+	countTokensConcurrency = 4
 )
 
 // Stats is the counter snapshot served by the admin API.
 type Stats struct {
-	Requests    int64
-	Retries     int64
-	Upstream429 int64
-	InFlight    int64
-	Queued      int
-	CellsInUse  int
-	QueueWaitMS int64
-	Keepalives  int64
+	Requests        int64
+	Retries         int64
+	Upstream429     int64
+	PrefillRefusals int64
+	InFlight        int64
+	Queued          int
+	CellsInUse      int
+	CellLimit       int
+	QueueWaitMS     int64
+	Keepalives      int64
 }
 
 // SessionCost is the accumulated cost of one session. USD sums
@@ -64,10 +70,15 @@ type Proxy struct {
 	requests    atomic.Int64
 	retries     atomic.Int64
 	upstream429 atomic.Int64
+	prefill429  atomic.Int64
 	inFlight    atomic.Int64
 	keepalives  atomic.Int64
 
 	tokens tokenCache
+	// countSlots caps concurrent token counting. Counting never prefills a
+	// prompt, so it stays out of the cell scheduler, but it still must not
+	// flood the gateway when the app asks for many bodies at once.
+	countSlots chan struct{}
 
 	costs *CostStore
 
@@ -84,13 +95,14 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client
 	}
 	store, _ := NewCostStore("")
 	return &Proxy{
-		cfg:    cfg,
-		reg:    reg,
-		log:    log,
-		client: client,
-		tokens: newTokenCache(),
-		costs:  store,
-		sched:  NewCellScheduler(8),
+		cfg:        cfg,
+		reg:        reg,
+		log:        log,
+		client:     client,
+		tokens:     newTokenCache(),
+		costs:      store,
+		sched:      NewCellScheduler(8),
+		countSlots: make(chan struct{}, countTokensConcurrency),
 	}
 }
 
@@ -110,14 +122,16 @@ func (p *Proxy) SetCostStore(s *CostStore) {
 func (p *Proxy) Stats() Stats {
 	active, queued := p.sched.Stats()
 	return Stats{
-		Requests:    p.requests.Load(),
-		Retries:     p.retries.Load(),
-		Upstream429: p.upstream429.Load(),
-		InFlight:    p.inFlight.Load(),
-		Queued:      queued,
-		CellsInUse:  active,
-		QueueWaitMS: p.sched.QueueWaitMS(),
-		Keepalives:  p.keepalives.Load(),
+		Requests:        p.requests.Load(),
+		Retries:         p.retries.Load(),
+		Upstream429:     p.upstream429.Load(),
+		PrefillRefusals: p.prefill429.Load(),
+		InFlight:        p.inFlight.Load(),
+		Queued:          queued,
+		CellsInUse:      active,
+		CellLimit:       p.sched.Limit(),
+		QueueWaitMS:     p.sched.QueueWaitMS(),
+		Keepalives:      p.keepalives.Load(),
 	}
 }
 
@@ -272,26 +286,38 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Each agent chain gets its own upstream cell, so parallel subagents stop
-	// colliding on one cell and refusing each other by prefill.
-	release, wait, aerr := p.sched.Acquire(ctx, cell,
-		prio, time.Duration(cfg.Scheduler.QueueTimeoutMS)*time.Millisecond)
-	waited = wait
-	if aerr != nil {
-		status = http.StatusTooManyRequests
-		if errors.Is(aerr, ErrQueueTimeout) {
-			status = http.StatusTooManyRequests
-			w.Header().Set("Retry-After", "5")
-			writeOverloaded(w, "no upstream cell available within queue_timeout_ms")
-		} else if ctx.Err() == nil {
-			http.Error(w, aerr.Error(), http.StatusBadGateway)
-			status = http.StatusBadGateway
-		} else {
+	// colliding on one cell and refusing each other by prefill. Token counting
+	// is the exception: it prefills nothing, and the app asks for it constantly,
+	// so a cell of its own would only queue real answers behind telemetry.
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/messages/count_tokens" {
+		select {
+		case p.countSlots <- struct{}{}:
+			defer func() { <-p.countSlots }()
+		case <-ctx.Done():
 			aborted = true
+			return
 		}
-		return
+	} else {
+		release, wait, aerr := p.sched.Acquire(ctx, cell,
+			prio, time.Duration(cfg.Scheduler.QueueTimeoutMS)*time.Millisecond)
+		waited = wait
+		if aerr != nil {
+			status = http.StatusTooManyRequests
+			if errors.Is(aerr, ErrQueueTimeout) {
+				status = http.StatusTooManyRequests
+				w.Header().Set("Retry-After", "5")
+				writeOverloaded(w, "no upstream cell available within queue_timeout_ms")
+			} else if ctx.Err() == nil {
+				http.Error(w, aerr.Error(), http.StatusBadGateway)
+				status = http.StatusBadGateway
+			} else {
+				aborted = true
+			}
+			return
+		}
+		defer release()
+		p.sched.ObserveQueueWait(waited)
 	}
-	defer release()
-	p.sched.ObserveQueueWait(waited)
 
 	base, err := p.upstreamRequest(ctx, r, cfg, body, cell)
 	if err != nil {
@@ -424,6 +450,13 @@ func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*htt
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			p.upstream429.Add(1)
+			// A prefill refusal is the gateway saying too many cells are being
+			// prefilled at once; every other 429 (allowance, throttling) says
+			// nothing about concurrency and must not move the ceiling.
+			if prefillRefusal(peekResponseBody(resp)) {
+				p.prefill429.Add(1)
+				p.sched.NotePrefillRefusal()
+			}
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			p.sched.ReportSuccess(cell)
@@ -448,6 +481,27 @@ func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*htt
 		waited += wait
 		p.retries.Add(1)
 	}
+}
+
+// prefillRefusal reports whether an upstream body is a prefill capacity
+// refusal rather than any other kind of 429.
+func prefillRefusal(body []byte) bool {
+	return bytes.Contains(bytes.ToLower(body), []byte("prefill"))
+}
+
+// peekResponseBody reads a bounded copy of the body and puts it back, so the
+// response can still be forwarded byte for byte afterwards.
+func peekResponseBody(resp *http.Response) []byte {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	return body
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -645,6 +699,8 @@ func isEventStream(h http.Header) bool {
 // sseParser reconstructs SSE lines from arbitrary read chunks: bytes after
 // the last newline stay pending until the next chunk completes the line.
 type sseParser struct {
+	// mu serialises the copy loop with the hold's release timer.
+	mu      sync.Mutex
 	pending []byte
 	acc     usageAccumulator
 	out     io.Writer
@@ -657,6 +713,8 @@ type sseParser struct {
 }
 
 func (s *sseParser) Feed(chunk []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.hold != nil && time.Since(s.hold.started) > s.hold.wait {
 		if !s.flushHold() {
 			return false
@@ -686,9 +744,9 @@ func (s *sseParser) emit(line []byte) bool {
 			s.hold.text.WriteString(thinkingDeltaText(line))
 			return s.settleHold()
 		}
-		// Blank separators inside a held event are buffered with it, so the
-		// client sees the original stream shape once the start ships.
-		if len(bytes.TrimSpace(line)) == 0 {
+		// Event lines, blank separators and the block's own signature travel
+		// with the held start; anything else means the block is over.
+		if isAmongHeldLines(line, s.hold.index) {
 			s.hold.deltas = append(s.hold.deltas, append([]byte(nil), line...))
 			return true
 		}
@@ -698,6 +756,7 @@ func (s *sseParser) emit(line []byte) bool {
 	}
 	if h := maybeHoldThinkingStart(line, s.summaryWait); h != nil {
 		s.hold = h
+		h.timer = time.AfterFunc(h.wait, func() { s.expireHold(h) })
 		s.processLine(line)
 		return true
 	}
@@ -716,17 +775,35 @@ func (s *sseParser) emit(line []byte) bool {
 	return true
 }
 
-// settleHold ships the held block as soon as a summary is known, or gives it
-// the generic one once the byte cap or the wait budget is spent.
+// settleHold ships the held block once a readable first line is complete, or
+// gives it the generic one once the byte cap or the wait budget is spent.
 func (s *sseParser) settleHold() bool {
 	h := s.hold
-	if sum := firstMeaningfulLine(h.text.String()); sum != "" {
+	text := h.text.String()
+	sum := firstMeaningfulLine(text)
+	complete := sum != "" && (strings.Contains(text, "\n") ||
+		(len([]rune(sum)) >= 24 && strings.ContainsAny(sum, ".!?")))
+	if complete {
 		return s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
 	}
 	if h.text.Len() >= thinkingSummaryMaxBytes || time.Since(h.started) > h.wait {
-		return s.flushHoldWith(thinkingSummaryFallback)
+		return s.flushHold()
 	}
 	return true
+}
+
+// expireHold releases a block whose model paused for the whole wait budget.
+func (s *sseParser) expireHold(h *thinkingHold) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hold != h {
+		return
+	}
+	sum := firstMeaningfulLine(h.text.String())
+	if sum == "" {
+		sum = thinkingSummaryFallback
+	}
+	s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
 }
 
 func (s *sseParser) flushHold() bool {
@@ -741,6 +818,9 @@ func (s *sseParser) flushHold() bool {
 func (s *sseParser) flushHoldWith(summary string) bool {
 	h := s.hold
 	s.hold = nil
+	if h.timer != nil {
+		h.timer.Stop()
+	}
 	if s.out == nil {
 		return true
 	}
@@ -765,6 +845,8 @@ func (s *sseParser) flushHoldWith(summary string) bool {
 }
 
 func (s *sseParser) Close() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.hold != nil && !s.flushHold() {
 		return false
 	}

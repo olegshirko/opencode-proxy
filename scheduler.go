@@ -20,6 +20,15 @@ const (
 	PriorityAuxiliary
 )
 
+const (
+	// minCellLimit is the floor the adaptive ceiling never goes below: one or
+	// two streams can always run, even while the gateway is refusing prefills.
+	minCellLimit = 2
+	// cellRecoveryInterval is how long the gateway must stop refusing prefills
+	// before one cell is added back to the ceiling.
+	cellRecoveryInterval = 2 * time.Minute
+)
+
 type waiter struct {
 	key      string
 	priority int
@@ -34,15 +43,20 @@ type waiter struct {
 type CellScheduler struct {
 	mu            sync.Mutex
 	maxConcurrent int
-	waiters       []*waiter
-	active        int
-	cells         map[string]int
-	seq           uint64
+	// softLimit is the ceiling actually enforced. It starts at maxConcurrent
+	// and steps down when the gateway refuses a prefill, then recovers one
+	// slot per cellRecoveryInterval while requests succeed.
+	softLimit int
+	lastStep  time.Time
+	now       func() time.Time
+
+	waiters []*waiter
+	active  int
+	cells   map[string]int
+	seq     uint64
 
 	queued      atomic.Int64
 	queueWaitMS atomic.Int64
-
-	dispatchSignal func()
 
 	// health tracks how long a cell has been refusing, so a stuck chain can be
 	// moved to a fresh cell instead of waiting forever.
@@ -65,11 +79,46 @@ func (s *CellScheduler) ReportFailure(key string) {
 	}
 }
 
-// ReportSuccess clears a cell's failure history.
+// ReportSuccess clears a cell's failure history and, after a quiet spell,
+// gives the ceiling one slot back.
 func (s *CellScheduler) ReportSuccess(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.health, key)
+	s.recoverLocked()
+}
+
+// recoverLocked raises the ceiling by one when nothing has been refused for
+// cellRecoveryInterval. Recovery needs a success, so a busy gateway is never
+// probed back up while it is struggling.
+func (s *CellScheduler) recoverLocked() {
+	floor := minCellLimit
+	if s.maxConcurrent < floor {
+		floor = s.maxConcurrent
+	}
+	if s.softLimit >= s.maxConcurrent || s.now().Sub(s.lastStep) < cellRecoveryInterval {
+		return
+	}
+	s.softLimit++
+	s.lastStep = s.now()
+	s.dispatchLocked()
+}
+
+// NotePrefillRefusal lowers the ceiling by one because the gateway refused a
+// prefill, which is its signal that too many cells are being prefilled. It
+// exists because the Go docs publish no concurrency number: the limit is
+// learned from the gateway instead of guessed.
+func (s *CellScheduler) NotePrefillRefusal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	floor := minCellLimit
+	if s.maxConcurrent < floor {
+		floor = s.maxConcurrent
+	}
+	if s.softLimit > floor {
+		s.softLimit--
+	}
+	s.lastStep = s.now()
 }
 
 // EffectiveKey returns the key a request should use. When the cell has been
@@ -86,10 +135,7 @@ func (s *CellScheduler) EffectiveKey(key string, priority int, allowMain bool, f
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := s.health[key]
-	if h == nil || time.Since(h.firstFailure) < fallbackAfter {
-		if h == nil {
-			return key
-		}
+	if h == nil || s.now().Sub(h.firstFailure) < fallbackAfter {
 		return key
 	}
 	h.rotation++
@@ -104,6 +150,8 @@ func NewCellScheduler(maxConcurrent int) *CellScheduler {
 	}
 	return &CellScheduler{
 		maxConcurrent: maxConcurrent,
+		softLimit:     maxConcurrent,
+		now:           time.Now,
 		cells:         make(map[string]int),
 		health:        make(map[string]*cellHealth),
 	}
@@ -204,7 +252,7 @@ func (s *CellScheduler) dispatchLocked() {
 // bestEligibleLocked picks the highest-priority, oldest waiter whose cell is
 // free while global capacity remains. A cell is used by at most one request.
 func (s *CellScheduler) bestEligibleLocked() *waiter {
-	if s.active >= s.maxConcurrent {
+	if s.active >= s.softLimit {
 		return nil
 	}
 	var best *waiter
@@ -230,6 +278,14 @@ func (s *CellScheduler) Stats() (active, queued int) {
 	active = s.active
 	s.mu.Unlock()
 	return active, int(s.queued.Load())
+}
+
+// Limit is the ceiling currently enforced, which may be below maxConcurrent
+// after the gateway refused a prefill, for /admin/status.
+func (s *CellScheduler) Limit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.softLimit
 }
 
 // QueueWaitMS is the total time requests spent waiting, for /admin/status.

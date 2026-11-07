@@ -73,21 +73,23 @@ func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := p.cfg.Get()
 	st := p.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
-		"upstream":       cfg.Upstream,
-		"listen":         cfg.Listen,
-		"started_at":     adminStart.UTC().Format(time.RFC3339),
-		"uptime_seconds": int(time.Since(adminStart).Seconds()),
-		"models":         len(p.reg.All()),
-		"requests":       st.Requests,
-		"retries":        st.Retries,
-		"upstream_429":   st.Upstream429,
-		"in_flight":      st.InFlight,
-		"queued":         st.Queued,
-		"cells_in_use":   st.CellsInUse,
-		"queue_wait_ms":  st.QueueWaitMS,
-		"keepalives":     st.Keepalives,
-		"max_cells":      cfg.Scheduler.MaxConcurrentCells,
+		"ok":               true,
+		"upstream":         cfg.Upstream,
+		"listen":           cfg.Listen,
+		"started_at":       adminStart.UTC().Format(time.RFC3339),
+		"uptime_seconds":   int(time.Since(adminStart).Seconds()),
+		"models":           len(p.reg.All()),
+		"requests":         st.Requests,
+		"retries":          st.Retries,
+		"upstream_429":     st.Upstream429,
+		"in_flight":        st.InFlight,
+		"queued":           st.Queued,
+		"cells_in_use":     st.CellsInUse,
+		"queue_wait_ms":    st.QueueWaitMS,
+		"keepalives":       st.Keepalives,
+		"max_cells":        cfg.Scheduler.MaxConcurrentCells,
+		"cell_limit":       st.CellLimit,
+		"prefill_refusals": st.PrefillRefusals,
 	})
 }
 

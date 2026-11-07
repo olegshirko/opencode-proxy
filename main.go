@@ -83,7 +83,7 @@ func main() {
 	proxy.SetScheduler(NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
 	flushCtx, stopFlush := context.WithCancel(context.Background())
 	defer stopFlush()
-	costs.StartFlusher(flushCtx, 5*time.Second)
+	flusherDone := costs.StartFlusher(flushCtx, 5*time.Second)
 
 	listen := cfg.Listen
 	if *addr != "" {
@@ -128,6 +128,9 @@ func main() {
 		}
 		close(idle)
 		stopFlush()
+		// Let the flusher finish its last write before this process exits:
+		// exiting mid-write leaves a session-cost.json.tmp-* behind.
+		<-flusherDone
 		if err := costs.Flush(); err != nil {
 			log.Printf("opencode-proxy: cost flush on exit failed: %v", err)
 		}

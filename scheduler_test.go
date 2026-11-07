@@ -177,3 +177,47 @@ func TestReportSuccessClearsRotationState(t *testing.T) {
 		t.Fatalf("rotated after a success: %q", got)
 	}
 }
+
+func TestCeilingDropsOnPrefillRefusalAndRecovers(t *testing.T) {
+	s := NewCellScheduler(8)
+	clock := time.Now()
+	s.now = func() time.Time { return clock }
+
+	for i := 0; i < 3; i++ {
+		s.NotePrefillRefusal()
+	}
+	if got := s.Limit(); got != 5 {
+		t.Fatalf("limit after three refusals = %d, want 5", got)
+	}
+
+	// A success right after a refusal must not raise the ceiling.
+	s.ReportSuccess("k")
+	if got := s.Limit(); got != 5 {
+		t.Fatalf("limit after immediate success = %d, want 5", got)
+	}
+
+	clock = clock.Add(cellRecoveryInterval + time.Second)
+	s.ReportSuccess("k")
+	if got := s.Limit(); got != 6 {
+		t.Fatalf("limit after quiet interval = %d, want 6", got)
+	}
+
+	// Recovery stops at the configured maximum.
+	clock = clock.Add(cellRecoveryInterval + time.Second)
+	s.ReportSuccess("k")
+	clock = clock.Add(cellRecoveryInterval + time.Second)
+	s.ReportSuccess("k")
+	if got := s.Limit(); got != 8 {
+		t.Fatalf("limit after full recovery = %d, want 8", got)
+	}
+}
+
+func TestCeilingNeverDropsBelowTheFloor(t *testing.T) {
+	s := NewCellScheduler(8)
+	for i := 0; i < 20; i++ {
+		s.NotePrefillRefusal()
+	}
+	if got := s.Limit(); got != minCellLimit {
+		t.Fatalf("limit = %d, want the floor %d", got, minCellLimit)
+	}
+}

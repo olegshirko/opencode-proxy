@@ -168,7 +168,39 @@ func TestHoldReleasesBeforeUnrelatedEvent(t *testing.T) {
 	}
 }
 
-func TestThinkingSummaryWaitDisabled(t *testing.T) {
+func TestStreamThinkingSummarySurvivesEventLines(t *testing.T) {
+	// The gateway puts an "event:" line before every data line; those lines
+	// belong to the held block and must not end the hold before its text has
+	// been seen, which used to leave every summary at the generic fallback.
+	sse := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"id":"m","role":"assistant"}}` + "\n\n" +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"We need answer user."}}` + "\n\n" +
+		"event: content_block_stop\n" +
+		`data: {"type":"content_block_stop","index":0}` + "\n\n"
+
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sse))
+	}, func(c *Config) {
+		c.Scheduler.ThinkingSummaryWaitMS = 300
+	})
+
+	rec := h.do(t, http.MethodPost, "/v1/messages",
+		`{"model":"glm-5.3","stream":true,"messages":[]}`, nil)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"summary":"We need answer user."`) {
+		t.Errorf("summary was not taken from the thinking text:\n%s", body)
+	}
+	if strings.Contains(body, `"summary":"Thinking"`) {
+		t.Errorf("summary fell back to the generic one:\n%s", body)
+	}
+}
+
+func TestStreamThinkingSummaryWaitDisabled(t *testing.T) {
 	sse := `data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n"
 
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {

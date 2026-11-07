@@ -154,9 +154,13 @@ func (s *CostStore) Flush() error {
 }
 
 // StartFlusher writes the store every interval while it has changed, and one
-// last time when ctx is cancelled.
-func (s *CostStore) StartFlusher(ctx context.Context, every time.Duration) {
+// last time when ctx is cancelled. The returned channel closes once that last
+// write is finished, so a caller on its way out can wait for it instead of
+// exiting mid-write and leaving a half-written temp file behind.
+func (s *CostStore) StartFlusher(ctx context.Context, every time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 		for {
@@ -169,4 +173,5 @@ func (s *CostStore) StartFlusher(ctx context.Context, every time.Duration) {
 			}
 		}
 	}()
+	return done
 }

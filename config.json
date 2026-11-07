@@ -19,9 +19,9 @@
     "default": "deepseek-v4.1-flash",
     "background": "deepseek-v4.1-flash",
     "aliases": {
-      "claude-v4.1-flash": "deepseek-v4.1-flash",
+      "claude-sonnet-5": "deepseek-v4.1-flash",
       "claude-v151-flash": "deepseek-v4.1-flash",
-      "claude-sonnet-5": "deepseek-v4.1-flash"
+      "claude-v4.1-flash": "deepseek-v4.1-flash"
     }
   },
   "retry": {
@@ -35,5 +35,15 @@
     "enabled": true,
     "token": ""
   },
-  "connect_timeout_seconds": 15
+  "scheduler": {
+    "max_concurrent_cells": 8,
+    "queue_timeout_ms": 60000,
+    "keepalive_after_ms": 3000,
+    "keepalive_interval_ms": 5000,
+    "fallback_after_ms": 20000,
+    "fallback_rotate_main": false,
+    "thinking_summary_wait_ms": 500
+  },
+  "connect_timeout_seconds": 15,
+  "session_cost_file": "/Users/oleg/opencode-proxy/session-cost.json"
 }

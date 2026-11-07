@@ -95,7 +95,10 @@ func (r *Registry) Available() []Model {
 // Both the input and the result are case-insensitive; the result is always
 // lowercase.
 func (r *Registry) Resolve(model string, cfg ModelsConfig) (target, reason string) {
-	in := strings.ToLower(model)
+	in := strings.ToLower(strings.TrimSpace(model))
+	// The desktop app appends "[1m]" to an id it runs with the 1M context
+	// beta; it is a client-side marker the gateway never sees.
+	in = strings.TrimSuffix(in, "[1m]")
 	if in == "" {
 		return strings.ToLower(cfg.Default), "default"
 	}

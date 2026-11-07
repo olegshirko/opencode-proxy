@@ -133,6 +133,9 @@ type thinkingHold struct {
 	index   int
 	deltas  [][]byte
 	text    bytes.Buffer
+	// timer releases the hold when the model pauses between thinking bursts;
+	// without it a long gap would keep the block from reaching the client.
+	timer *time.Timer
 }
 
 func maybeHoldThinkingStart(line []byte, wait time.Duration) *thinkingHold {
@@ -165,7 +168,9 @@ func maybeHoldThinkingStart(line []byte, wait time.Duration) *thinkingHold {
 	}
 }
 
-func isThinkingDeltaFor(line []byte, index int) bool {
+// isDeltaFor reports whether the line is a content_block_delta of the given
+// delta type for the held block index.
+func isDeltaFor(line []byte, index int, kind string) bool {
 	payload, ok := sseDataPayload(line)
 	if !ok {
 		return false
@@ -180,7 +185,33 @@ func isThinkingDeltaFor(line []byte, index int) bool {
 	if json.Unmarshal(payload, &ev) != nil {
 		return false
 	}
-	return ev.Type == "content_block_delta" && ev.Delta.Type == "thinking_delta" && ev.Index == index
+	return ev.Type == "content_block_delta" && ev.Delta.Type == kind && ev.Index == index
+}
+
+func isThinkingDeltaFor(line []byte, index int) bool {
+	return isDeltaFor(line, index, "thinking_delta")
+}
+
+// isAmongHeldLines reports whether the line is part of the SSE envelope or the
+// thinking block itself, and so must travel with a held content_block_start
+// instead of ending the hold. Without this an "event: content_block_delta"
+// line would ship the start before any thinking text was seen, and every
+// summary would fall back to the generic one.
+func isAmongHeldLines(line []byte, index int) bool {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return true
+	}
+	if isThinkingDeltaFor(line, index) || isDeltaFor(line, index, "signature_delta") {
+		return true
+	}
+	switch {
+	case bytes.HasPrefix(line, []byte("event:")),
+		bytes.HasPrefix(line, []byte("id:")),
+		bytes.HasPrefix(line, []byte("retry:")),
+		bytes.HasPrefix(line, []byte(":")):
+		return true
+	}
+	return false
 }
 
 func thinkingDeltaText(line []byte) string {
