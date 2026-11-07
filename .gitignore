@@ -4,3 +4,6 @@ proxy.log
 opencode-proxy
 .superpowers/
 .DS_Store
+bin/
+*.bak
+service.*.log
