@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"opencode-proxy/internal/picker"
 )
 
 const (
@@ -82,38 +84,7 @@ type modelFile struct {
 // effortOrder is the ladder used to pick the highest supported level.
 var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
-// pickerOverrides renames picker ids. The desktop app validates that a
-// gateway route references an Anthropic model and flags ids carrying vendor
-// names (deepseek, qwen, glm, kimi, ...), so every picker spelling here is
-// vendor-neutral: a short code plus the size/version. Keep them stable —
-// the app profile and the cost table are keyed by these names.
-var pickerOverrides = map[string]string{
-	"deepseek-v4.1-flash":        "DS41-Flash",
-	"deepseek-v4-pro":            "DPV4-Pro",
-	"glm-5.3":                    "GL-5.3",
-	"glm-5.2":                    "GL-5.2",
-	"glm-5.3-flash":              "GL-5.3-Flash",
-	"gemini-4-argon":             "Argon-4",
-	"kimi-k3":                    "K3",
-	"kimi-k3.1-pro":              "K31-Pro",
-	"kimi-k2.7-code":             "K27-Code",
-	"mimo-v2.6-flash":            "M26-Flash",
-	"mimo-v2.6-pro":              "M26-Pro",
-	"minimax-m3":                 "MM3",
-	"minimax-m3.1-flash":         "MM31-Flash",
-	"qwen3.7-plus":               "Q37-Plus",
-	"qwen3.8-flash":              "Q38-Flash",
-	"qwen3.8-max":                "Q38-Max",
-	"hy3":                        "H3",
-	"longcat-2.0":                "LC-2.0",
-	"grok-4.7":                   "GR-4.7",
-	"gpt-6-luna":                 "Luna-6",
-	"gpt-5.6-luna":               "Luna-5.6",
-	"muse-spark-1.2-contributor": "Spark-1.2",
-	"muse-spark-1.3-contributor": "Spark-1.3",
-}
-
-// FetchCatalog reads the Go model catalog.
+// FetchCatalog reads the gateway's model catalog.
 func FetchCatalog(ctx context.Context, url string, hc *http.Client) ([]catalogModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -134,25 +105,10 @@ func FetchCatalog(ctx context.Context, url string, hc *http.Client) ([]catalogMo
 	return c.Data, nil
 }
 
-// PickerName turns a native id into the id the desktop app shows. It prefers
-// the catalog's display name with spaces as dashes, because that keeps
-// acronyms ("GLM") readable, and falls back to the id when the display name
-// does not spell the id (as with "Claude Haiku 5.5" vs claude-haiku-5-5).
-// Either way only case and separators differ, so the proxy's prefix rule maps
-// it straight back. Ids that already start with "claude-" get the prefix
-// twice on purpose: otherwise the proxy's background rule would swallow them.
+// PickerName turns a native id into the id the desktop app shows. The rules
+// live in internal/picker so the proxy names live catalog entries the same way.
 func PickerName(id, name string) string {
-	if strings.HasPrefix(id, "claude-") {
-		return "claude-" + id
-	}
-	if short, ok := pickerOverrides[id]; ok {
-		return "claude-" + short
-	}
-	if candidate := strings.ReplaceAll(strings.TrimSpace(name), " ", "-"); candidate != "" &&
-		strings.ToLower(candidate) == id {
-		return "claude-" + candidate
-	}
-	return "claude-" + id
+	return picker.Name(id, name)
 }
 
 // MaxEffort returns the highest effort level the model supports, or "low"
@@ -209,7 +165,9 @@ func toModel(cm catalogModel) model {
 // Probe sends a one-token request to see whether the model is reachable from
 // this region. Any non-2xx answer counts as unavailable.
 func Probe(ctx context.Context, baseURL, token string, m model, hc *http.Client) bool {
-	body := fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, m.ID)
+	// max_tokens must clear each model's minimum: some answer
+	// integer_below_min_value at 1 and would be recorded as unavailable.
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`, m.ID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/messages", strings.NewReader(body))
 	if err != nil {
 		return false

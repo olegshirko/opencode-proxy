@@ -83,10 +83,19 @@ func main() {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
 	proxy.SetCostStore(costs)
+
+	// The quota ledger turns accumulated allowance into the 5-hour/weekly
+	// headers Claude Code shows as plan usage.
+	usage, err := NewUsageLedger(cfg.UsageFile)
+	if err != nil {
+		log.Fatalf("opencode-proxy: %v", err)
+	}
+	proxy.SetUsageLedger(usage)
 	proxy.SetScheduler(NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
 	flushCtx, stopFlush := context.WithCancel(context.Background())
 	defer stopFlush()
 	flusherDone := costs.StartFlusher(flushCtx, 5*time.Second)
+	usageDone := usage.StartFlusher(flushCtx, 5*time.Second)
 
 	listen := cfg.Listen
 	if *addr != "" {
@@ -136,6 +145,10 @@ func main() {
 		<-flusherDone
 		if err := costs.Flush(); err != nil {
 			log.Printf("opencode-proxy: cost flush on exit failed: %v", err)
+		}
+		<-usageDone
+		if err := usage.Flush(); err != nil {
+			log.Printf("opencode-proxy: usage flush on exit failed: %v", err)
 		}
 	}()
 

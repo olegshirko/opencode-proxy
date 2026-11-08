@@ -7,7 +7,7 @@
       "behaves_as": "claude-sonnet-5-5",
       "max_effort": "max",
       "supports_1m": true,
-      "available": false,
+      "available": true,
       "context": 1048576,
       "pricing": {
         "input": 0,
@@ -127,7 +127,7 @@
       "behaves_as": "claude-sonnet-5-5",
       "max_effort": "max",
       "supports_1m": true,
-      "available": false,
+      "available": true,
       "context": 1050000,
       "pricing": {
         "input": 0.2,
@@ -142,7 +142,7 @@
       "behaves_as": "claude-sonnet-5-5",
       "max_effort": "max",
       "supports_1m": true,
-      "available": false,
+      "available": true,
       "context": 1050000,
       "pricing": {
         "input": 0.1,
@@ -172,7 +172,7 @@
       "behaves_as": "claude-sonnet-5",
       "max_effort": "xhigh",
       "supports_1m": false,
-      "available": false,
+      "available": true,
       "context": 500000,
       "pricing": {
         "input": 2,

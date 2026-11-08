@@ -75,12 +75,15 @@ type Proxy struct {
 	keepalives  atomic.Int64
 
 	tokens tokenCache
+	// catalog is the gateway's live model list behind /v1/models.
+	catalog *liveCatalog
 	// countSlots caps concurrent token counting. Counting never prefills a
 	// prompt, so it stays out of the cell scheduler, but it still must not
 	// flood the gateway when the app asks for many bodies at once.
 	countSlots chan struct{}
 
 	costs *CostStore
+	usage *UsageLedger
 
 	sched *CellScheduler
 
@@ -100,6 +103,7 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client
 		log:        log,
 		client:     client,
 		tokens:     newTokenCache(),
+		catalog:    newLiveCatalog(),
 		costs:      store,
 		sched:      NewCellScheduler(8),
 		countSlots: make(chan struct{}, countTokensConcurrency),
@@ -116,6 +120,20 @@ func (p *Proxy) SetScheduler(s *CellScheduler) {
 // persistent one.
 func (p *Proxy) SetCostStore(s *CostStore) {
 	p.costs = s
+}
+
+// SetUsageLedger gives the proxy the spend history used for the quota headers
+// Claude Code reads. Without it no quota headers are emitted.
+func (p *Proxy) SetUsageLedger(l *UsageLedger) {
+	p.usage = l
+}
+
+// Quota reports the current spend rolled up into the quota windows.
+func (p *Proxy) Quota(limits LimitsConfig, now time.Time) UsageSnapshot {
+	if p.usage == nil {
+		return UsageSnapshot{}
+	}
+	return p.usage.Snapshot(limits, now)
 }
 
 // Stats returns the current counters.
@@ -143,6 +161,15 @@ func (p *Proxy) SessionCost(session string) SessionCost {
 
 func (p *Proxy) addSessionCost(session, model string, allowance, listCost float64, now time.Time) {
 	p.costs.Add(session, model, allowance, listCost, now)
+}
+
+// applyQuota writes the unified rate-limit headers Claude Code reads to show
+// remaining allowance. It runs only when a monthly budget is configured.
+func (p *Proxy) applyQuota(h http.Header, cfg *Config) {
+	if p.usage == nil || cfg.Limits.MonthlyUSD <= 0 {
+		return
+	}
+	p.Quota(cfg.Limits, time.Now()).Apply(h)
 }
 
 var requestIDCounter atomic.Uint64
@@ -232,7 +259,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if model == "" {
 				model = modelIn
 			}
-			p.addSessionCost(session, model, acc.allowance, acc.cost, time.Now())
+			now := time.Now()
+			p.addSessionCost(session, model, acc.allowance, acc.cost, now)
+			// The quota ledger tracks what the plan actually charged, which is
+			// allowance, not the list price.
+			p.usage.Add(model, acc.allowance, now)
 		}
 		rec := RequestRecord{
 			ID: newRequestID(), Method: r.Method, Path: r.URL.Path, Session: session,
@@ -274,6 +305,27 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			stripThinkingSummaries(data)
 			if m, ok := data["model"].(string); ok {
 				target, reason := p.reg.Resolve(m, cfg.Models)
+				// A model the gateway added after the last snapshot is not in
+				// the registry; the live catalog resolves it instead of letting
+				// it fall through to the default. The lookup only reads the
+				// cache, so a cold catalog never delays a request.
+				if reason == "default" {
+					if id, ok := p.catalog.Lookup(m); ok {
+						target, reason = id, "catalog"
+					} else if route := cfg.Models.RouteNamed(m); route != nil && route.ID != "" {
+						// Models outside the subscription are declared by their
+						// route, so they never reach the registry.
+						target, reason = strings.ToLower(route.ID), "route"
+					}
+				}
+				// Auxiliary calls (background summarising, telemetry-ish
+				// one-shots) do not need the main model. Compaction is
+				// deliberately excluded: it rewrites the context and a cheap
+				// model would degrade every later turn.
+				if strings.EqualFold(class, "auxiliary") && r.Header.Get("X-Claude-Code-Compaction") == "" &&
+					cfg.Models.Background != "" && !strings.EqualFold(target, cfg.Models.Background) {
+					target, reason = strings.ToLower(cfg.Models.Background), "background"
+				}
 				data["model"] = target
 				if rewritten, err := json.Marshal(data); err == nil {
 					body = rewritten
@@ -319,7 +371,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.sched.ObserveQueueWait(waited)
 	}
 
-	base, err := p.upstreamRequest(ctx, r, cfg, body, cell)
+	base, err := p.upstreamRequest(ctx, r, cfg, body, cell, cfg.Models.RouteFor(modelOut))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		status = http.StatusBadGateway
@@ -330,6 +382,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Streaming requests own their retry loop, because a client that sees no
 	// bytes assumes the stream died. serveStream keeps it fed with pings.
 	if streamReq {
+		// Headers must be in place before the keepalive writes the status
+		// line, and before the first upstream event is relayed.
+		p.applyQuota(w.Header(), cfg)
 		status, attempts, acc, aborted = p.serveStream(ctx, w, cfg, base, body, modelIn, capture, cell)
 		return
 	}
@@ -375,13 +430,29 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if capture != nil && cfg.Log.Capture.ResponseHeaders {
 		capture.ResponseHeaders = maskHeaders(resp.Header)
 	}
+	if status >= 200 && status < 300 {
+		p.applyQuota(w.Header(), cfg)
+	}
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	acc, aborted = relayResponse(ctx, w, resp, capture, cfg, modelIn)
 }
 
-func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string) (*http.Request, error) {
-	url := strings.TrimRight(cfg.Upstream, "/") + r.URL.Path
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string, route *ModelRoute) (*http.Request, error) {
+	upstream := cfg.Upstream
+	if route != nil && route.BaseURL != "" {
+		upstream = route.BaseURL
+	}
+	url := strings.TrimRight(upstream, "/") + r.URL.Path
 	if r.URL.RawQuery != "" {
 		url += "?" + r.URL.RawQuery
 	}
@@ -398,6 +469,20 @@ func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Confi
 		}
 	}
 	req.Header.Set("x-opencode-session", session)
+	if route != nil {
+		// The route's own credential replaces whatever the client sent: the
+		// client holds the subscription token, and this endpoint wants a
+		// different one.
+		token := route.Token()
+		if token == "" && (route.TokenEnv != "" || route.TokenFile != "") {
+			return nil, fmt.Errorf("route %s: no credential in %s", route.ID,
+				firstNonEmpty(route.TokenEnv, route.TokenFile))
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Del("x-api-key")
+		}
+	}
 	return req, nil
 }
 
@@ -420,6 +505,12 @@ func cloneRequestBody(ctx context.Context, base *http.Request, body []byte) *htt
 
 func copyHeaders(dst, src http.Header) {
 	for name, values := range src {
+		// A synthesized quota header beats an upstream duplicate: the two
+		// would otherwise reach the client as two values and confuse the
+		// usage meter.
+		if dst.Get(name) != "" && strings.HasPrefix(strings.ToLower(name), "anthropic-ratelimit-unified-") {
+			continue
+		}
 		for _, v := range values {
 			dst.Add(name, v)
 		}

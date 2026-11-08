@@ -108,6 +108,38 @@ def active_profile(explicit):
              + "; pass --profile PATH")
 
 
+def routed_models():
+    """Models declared by a route in config.json.
+
+    They live on another endpoint rather than in the gateway catalog, so
+    models.json never lists them and they have to be added here.
+    """
+    try:
+        with open(CONFIG) as f:
+            routes = (json.load(f).get("models") or {}).get("routes") or []
+    except OSError:
+        return []
+    out = []
+    for r in routes:
+        if not r.get("id") or not r.get("picker"):
+            continue
+        p = r.get("pricing") or {}
+        out.append({
+            "id": r["id"],
+            "picker": r["picker"],
+            "label": r.get("label") or r["picker"],
+            "behaves_as": r.get("behaves_as") or "claude-sonnet-5",
+            "max_effort": r.get("max_effort") or "low",
+            "supports_1m": (r.get("context") or 0) >= 1_000_000,
+            "pricing": {
+                "input": p.get("input") or 0,
+                "output": p.get("output") or 0,
+                "cache_read": p.get("cache_read") or 0,
+            },
+        })
+    return out
+
+
 def default_model_id():
     try:
         with open(CONFIG) as f:
@@ -157,6 +189,9 @@ def main():
         explicit = args[args.index("--profile") + 1]
 
     models = load_models()
+    # Routed models come from config.json: the catalog does not know them.
+    known = {m["id"] for m in models}
+    models.extend(m for m in routed_models() if m["id"] not in known)
     default = default_model_id()
     entries, prices = build(models, default)
     path = active_profile(explicit)

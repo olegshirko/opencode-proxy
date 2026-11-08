@@ -10,3 +10,6 @@ service.*.log
 session-cost.json
 *.jsonl.*
 session-cost.json.tmp-*
+usage.json
+proxy.out
+usage.json.tmp-*

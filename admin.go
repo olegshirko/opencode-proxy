@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"opencode-proxy/internal/picker"
 	"time"
 )
 
@@ -39,30 +41,73 @@ func (p *Proxy) AdminHandler() http.Handler {
 	})
 }
 
-// ModelsHandler serves the Anthropic model-list shape from the registry, so a
-// client can populate its picker without a hand-written list. Only ids that
-// look like Claude models are offered, and nothing is forwarded upstream.
+// ModelsHandler serves the Anthropic model-list shape from the gateway's own
+// catalog, so the picker follows the subscription instead of a snapshot file.
+// The registry stays as the fallback for when the catalog cannot be read, and
+// it also says which models are known to be unavailable.
 func (p *Proxy) ModelsHandler(w http.ResponseWriter, r *http.Request) {
+	cfg := p.cfg.Get()
 	type entry struct {
 		Type        string `json:"type"`
 		ID          string `json:"id"`
 		DisplayName string `json:"display_name"`
 	}
-	out := make([]entry, 0, len(p.reg.All()))
-	for _, m := range p.reg.All() {
-		if !m.Available {
-			continue
+
+	out := make([]entry, 0, 32)
+	live, err := p.catalog.Get(r.Context(), catalogURL(cfg), p.client, r.Header.Get("Authorization"))
+	switch {
+	case err == nil && len(live) > 0:
+		// The gateway's list is authoritative: it names the models this
+		// subscription has. Availability is a per-request condition that
+		// changes (country, opt-ins, transient outages), so nothing is hidden
+		// here — a model that cannot run reports its own error when used.
+		for _, m := range live {
+			out = append(out, entry{Type: "model", ID: m.Picker, DisplayName: m.Name})
 		}
-		id := m.Picker
-		if id == "" {
-			id = m.ID
+	default:
+		// The gateway list is unreachable: serve the last snapshot rather than
+		// an empty picker.
+		for _, m := range p.reg.All() {
+			if !m.Available {
+				continue
+			}
+			id := m.Picker
+			if id == "" {
+				id = m.ID
+			}
+			lower := strings.ToLower(id)
+			if !strings.HasPrefix(lower, "claude") && !strings.Contains(lower, "anthropic") {
+				continue
+			}
+			out = append(out, entry{Type: "model", ID: id, DisplayName: m.Label})
 		}
-		lower := strings.ToLower(id)
-		if !strings.HasPrefix(lower, "claude") && !strings.Contains(lower, "anthropic") {
-			continue
-		}
-		out = append(out, entry{Type: "model", ID: id, DisplayName: m.Label})
 	}
+
+	// Routed models are not in the gateway catalog at all: they live on
+	// another endpoint and are declared in the config, so they are added here
+	// rather than being dropped from the picker.
+	seen := make(map[string]bool, len(out))
+	for _, m := range out {
+		seen[strings.ToLower(m.ID)] = true
+	}
+	for _, route := range cfg.Models.Routes {
+		if route.ID == "" {
+			continue
+		}
+		id := route.Picker
+		if id == "" {
+			id = picker.Name(route.ID, route.Label)
+		}
+		if seen[strings.ToLower(id)] {
+			continue
+		}
+		label := route.Label
+		if label == "" {
+			label = route.ID
+		}
+		out = append(out, entry{Type: "model", ID: id, DisplayName: label})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data":     out,
 		"has_more": false,
@@ -90,6 +135,7 @@ func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 		"max_cells":        cfg.Scheduler.MaxConcurrentCells,
 		"cell_limit":       st.CellLimit,
 		"prefill_refusals": st.PrefillRefusals,
+		"quota":            p.Quota(cfg.Limits, time.Now()),
 	})
 }
 

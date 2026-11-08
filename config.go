@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,16 +13,18 @@ import (
 // Config is the proxy configuration. It lives in one JSON file that is
 // reread on mtime changes so edits apply without a restart.
 type Config struct {
-	Listen                string       `json:"listen"`
-	Upstream              string       `json:"upstream"`
-	SessionFallback       string       `json:"session_fallback"`
-	Log                   LogConfig    `json:"log"`
-	Models                ModelsConfig `json:"models"`
-	Retry                 RetryConfig  `json:"retry"`
+	Listen                string          `json:"listen"`
+	Upstream              string          `json:"upstream"`
+	SessionFallback       string          `json:"session_fallback"`
+	Log                   LogConfig       `json:"log"`
+	Models                ModelsConfig    `json:"models"`
+	Retry                 RetryConfig     `json:"retry"`
 	Admin                 AdminConfig     `json:"admin"`
 	Scheduler             SchedulerConfig `json:"scheduler"`
 	ConnectTimeoutSeconds int             `json:"connect_timeout_seconds"`
 	SessionCostFile       string          `json:"session_cost_file"`
+	UsageFile             string          `json:"usage_file"`
+	Limits                LimitsConfig    `json:"limits"`
 }
 
 // SchedulerConfig tunes cell assignment and the keepalive used while retrying.
@@ -53,10 +56,85 @@ type CaptureConfig struct {
 	ResponseBody    bool `json:"response_body"`
 }
 
+// ModelRoute sends one model to a different upstream endpoint with its own
+// credentials. The gateway is not one host: the subscription answers on
+// /inference/go, while models outside the plan live on /inference with their
+// own token, and a route is what tells the proxy which is which.
+type ModelRoute struct {
+	ID        string  `json:"id"`
+	Picker    string  `json:"picker"`
+	Label     string  `json:"label"`
+	BehavesAs string  `json:"behaves_as"`
+	MaxEffort string  `json:"max_effort"`
+	Context   int     `json:"context"`
+	BaseURL   string  `json:"base_url"`
+	TokenEnv  string  `json:"token_env"`
+	TokenFile string  `json:"token_file"`
+	Pricing   Pricing `json:"pricing"`
+}
+
+// Matches reports whether the route owns this model name, which may be the
+// gateway id or the picker the desktop app shows.
+func (r *ModelRoute) Matches(name string) bool {
+	in := strings.ToLower(strings.TrimSpace(name))
+	return in != "" && (in == strings.ToLower(r.ID) || in == strings.ToLower(r.Picker))
+}
+
+// Token returns the route's credential, read from the environment first and
+// from a file second. An empty result means the route runs unauthenticated.
+func (r *ModelRoute) Token() string {
+	if r == nil {
+		return ""
+	}
+	if r.TokenEnv != "" {
+		if v := strings.TrimSpace(os.Getenv(r.TokenEnv)); v != "" {
+			return v
+		}
+	}
+	if r.TokenFile != "" {
+		path := r.TokenFile
+		if strings.HasPrefix(path, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				path = filepath.Join(home, path[2:])
+			}
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+
 type ModelsConfig struct {
 	Default    string            `json:"default"`
 	Background string            `json:"background"`
 	Aliases    map[string]string `json:"aliases"`
+	Routes     []ModelRoute      `json:"routes"`
+	// CatalogURL is the gateway's model list that /v1/models serves. Empty
+	// means derive it from upstream, so the picker follows the subscription
+	// without a hand-maintained file.
+	CatalogURL string `json:"catalog_url"`
+}
+
+// RouteFor returns the route that owns a resolved gateway id, or nil.
+func (m ModelsConfig) RouteFor(id string) *ModelRoute {
+	for i := range m.Routes {
+		if strings.EqualFold(strings.TrimSpace(m.Routes[i].ID), id) {
+			return &m.Routes[i]
+		}
+	}
+	return nil
+}
+
+// RouteNamed returns the route owning a name the client sent, which may be
+// the picker rather than the gateway id.
+func (m ModelsConfig) RouteNamed(name string) *ModelRoute {
+	for i := range m.Routes {
+		if m.Routes[i].Matches(name) {
+			return &m.Routes[i]
+		}
+	}
+	return nil
 }
 
 type RetryConfig struct {
@@ -114,15 +192,22 @@ func Defaults() Config {
 		},
 		ConnectTimeoutSeconds: 15,
 		Scheduler: SchedulerConfig{
-			MaxConcurrentCells:  8,
-			QueueTimeoutMS:      60000,
-			KeepaliveAfterMS:    3000,
-			KeepaliveIntervalMS: 5000,
+			MaxConcurrentCells:    8,
+			QueueTimeoutMS:        60000,
+			KeepaliveAfterMS:      3000,
+			KeepaliveIntervalMS:   5000,
 			FallbackAfterMS:       20000,
 			FallbackRotateMain:    false,
 			ThinkingSummaryWaitMS: 500,
 		},
 		SessionCostFile: filepath.Join(filepath.Dir(logFile), "session-cost.json"),
+		UsageFile:       filepath.Join(filepath.Dir(logFile), "usage.json"),
+		Limits: LimitsConfig{
+			MonthlyUSD:       0,
+			FiveHourFraction: 0.2,
+			WeeklyFraction:   0.5,
+			WarningFraction:  0.85,
+		},
 	}
 }
 

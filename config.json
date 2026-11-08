@@ -45,5 +45,13 @@
     "thinking_summary_wait_ms": 500
   },
   "connect_timeout_seconds": 15,
-  "session_cost_file": "/Users/oleg/opencode-proxy/session-cost.json"
+  "session_cost_file": "/Users/oleg/opencode-proxy/session-cost.json",
+  "usage_file": "/Users/oleg/opencode-proxy/usage.json",
+  "limits": {
+    "monthly_usd": 30,
+    "five_hour_fraction": 0.4,
+    "weekly_fraction": 0.5,
+    "warning_fraction": 0.85,
+    "month_start": "2026-11-06T21:00:00+03:00"
+  }
 }
