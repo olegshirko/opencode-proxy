@@ -31,6 +31,9 @@ func buildRouter(proxy *Proxy) http.Handler {
 	// Model discovery endpoint: the app may read it instead of a hand-written
 	// list. It is answered locally and never forwarded.
 	mux.HandleFunc("GET /v1/models", proxy.ModelsHandler)
+	// Web search for the desktop app's built-in search connector. It runs
+	// through OpenCode's providers and never touches the upstream model.
+	mux.HandleFunc("POST /search", SearchHandler)
 	// The desktop app probes this before it will use the endpoint.
 	mux.HandleFunc("HEAD /api/hello", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

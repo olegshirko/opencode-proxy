@@ -9,7 +9,7 @@ UID     := $(shell id -u)
 
 # Only this module's packages: the worktree may hold other people's scratch
 # directories, and they must not be able to fail this build.
-PKGS := . ./cmd/...
+PKGS := . ./cmd/... ./internal/...
 
 .PHONY: build test smoke install restart uninstall verify models
 
