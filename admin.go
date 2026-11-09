@@ -6,6 +6,7 @@ import (
 	"opencode-proxy/internal/reqlog"
 	"strings"
 
+	"opencode-proxy/internal/catalog"
 	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
@@ -59,7 +60,7 @@ func (p *Proxy) ModelsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := make([]entry, 0, 32)
-	live, err := p.catalog.Get(r.Context(), catalogURL(cfg), p.client, r.Header.Get("Authorization"))
+	live, err := p.catalog.Get(r.Context(), catalog.URLFor(cfg.Models.CatalogURL, cfg.Upstream), p.client, r.Header.Get("Authorization"))
 	switch {
 	case err == nil && len(live) > 0:
 		// The gateway's list is authoritative: it names the models this

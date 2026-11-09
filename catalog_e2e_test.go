@@ -1,18 +1,18 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"opencode-proxy/internal/config"
-	"opencode-proxy/internal/reqlog"
 	"sync/atomic"
 	"testing"
+
+	"opencode-proxy/internal/config"
+	"opencode-proxy/internal/reqlog"
 )
 
-// catalogServer answers the gateway's model list and counts the requests, so
-// a test can tell a cached answer from a fresh fetch.
+// catalogServer answers the gateway's model list; a local copy of the helper
+// that lives with the catalog package's own tests.
 func catalogServer(t *testing.T, token string, body string) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	var hits atomic.Int64
@@ -44,17 +44,6 @@ func modelsOf(t *testing.T, rec *httptest.ResponseRecorder) []string {
 		ids = append(ids, m.ID)
 	}
 	return ids
-}
-
-func TestCatalogURLDerivesFromUpstream(t *testing.T) {
-	cfg := config.Defaults()
-	if got := catalogURL(&cfg); got != "https://opencode.ai/inference/go/v1/models" {
-		t.Fatalf("derived catalog URL = %q", got)
-	}
-	cfg.Models.CatalogURL = "http://example.test/models"
-	if got := catalogURL(&cfg); got != "http://example.test/models" {
-		t.Fatalf("explicit catalog URL = %q", got)
-	}
 }
 
 func TestModelsEndpointUsesTheLiveCatalog(t *testing.T) {
@@ -108,22 +97,6 @@ func TestModelsEndpointFallsBackToTheSnapshot(t *testing.T) {
 	}
 	if ids := modelsOf(t, rec); len(ids) != 2 {
 		t.Fatalf("fallback models = %v, want the two from models.json", ids)
-	}
-}
-
-func TestLiveCatalogIsCached(t *testing.T) {
-	srv, hits := catalogServer(t, "", `{"data":[{"id":"glm-5.3","name":"GLM 5.3"}]}`)
-	c := newLiveCatalog()
-	for i := 0; i < 3; i++ {
-		if _, err := c.Get(context.Background(), srv.URL, &http.Client{}, ""); err != nil {
-			t.Fatalf("get %d: %v", i, err)
-		}
-	}
-	if got := hits.Load(); got != 1 {
-		t.Fatalf("upstream fetches = %d, want 1: the catalog must be cached", got)
-	}
-	if id, ok := c.Lookup("claude-GL-5.3"); !ok || id != "glm-5.3" {
-		t.Fatalf("Lookup = (%q, %v), want glm-5.3", id, ok)
 	}
 }
 

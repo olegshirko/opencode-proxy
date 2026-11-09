@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/catalog"
 	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
@@ -65,7 +66,7 @@ type Proxy struct {
 
 	tokens tokenCache
 	// catalog is the gateway's live model list behind /v1/models.
-	catalog *liveCatalog
+	catalog *catalog.Catalog
 	// countSlots caps concurrent token counting. Counting never prefills a
 	// prompt, so it stays out of the cell scheduler, but it still must not
 	// flood the gateway when the app asks for many bodies at once.
@@ -92,7 +93,7 @@ func NewProxy(cfg *config.ConfigLoader, reg *models.Registry, log *reqlog.Logger
 		log:        log,
 		client:     client,
 		tokens:     newTokenCache(),
-		catalog:    newLiveCatalog(),
+		catalog:    catalog.New(),
 		costs:      store,
 		sched:      scheduler.NewCellScheduler(8),
 		countSlots: make(chan struct{}, countTokensConcurrency),
