@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestDefaultsMatchSpec(t *testing.T) {
 	}{
 		{"upstream", cfg.Upstream, "https://opencode.ai/inference/go/anthropic"},
 		{"session_fallback", cfg.SessionFallback, "my-session-1"},
-		{"log.file", cfg.Log.File, filepath.Join(home, "opencode-proxy", "var", "proxy.log")},
+		{"log.file", cfg.Log.File, filepath.Join(defaultStateDirFor(runtime.GOOS, home), "proxy.log")},
 		{"log.level", cfg.Log.Level, "info"},
 		{"log.max_mb", cfg.Log.MaxMB, 10},
 		{"log.keep", cfg.Log.Keep, 5},

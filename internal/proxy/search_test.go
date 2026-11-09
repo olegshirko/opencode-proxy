@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,9 @@ import (
 // fakeSearchCLI writes a script that stands in for the opencode binary.
 func fakeSearchCLI(t *testing.T, stdout string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake opencode CLI is a POSIX shell script; windows coverage lands with phase 2")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
 	script := "#!/bin/sh\ncat <<'EOF'\n" + stdout + "\nEOF\n"
