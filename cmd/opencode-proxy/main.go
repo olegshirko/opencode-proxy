@@ -24,11 +24,7 @@ import (
 
 // defaultConfigPath is used when -config is not given.
 func defaultConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "config.json"
-	}
-	return filepath.Join(home, "opencode-proxy", "config.json")
+	return config.DefaultConfigPath()
 }
 
 // CleanupStaleTempFiles removes atomic-save leftovers (*.tmp-*). A relaunch mid-

@@ -53,10 +53,7 @@ type AdminConfig struct {
 // Defaults returns the built-in configuration. Callers get a fresh value,
 // including a fresh Aliases map.
 func Defaults() Config {
-	logFile := "proxy.log"
-	if home, err := os.UserHomeDir(); err == nil {
-		logFile = filepath.Join(home, "opencode-proxy", "var", "proxy.log")
-	}
+	logFile := filepath.Join(DefaultStateDir(), "proxy.log")
 
 	return Config{
 		Listen:          "127.0.0.1:4000",
