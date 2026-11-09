@@ -1,4 +1,4 @@
-package main
+package reqlog
 
 import (
 	"encoding/json"
@@ -59,14 +59,14 @@ type CaptureRecord struct {
 // It is safe for concurrent use.
 type Logger struct {
 	mu          sync.Mutex
-	cfg         LogConfig
+	cfg         Config
 	main        io.Writer
 	mainFile    *os.File
 	captureFile *os.File
 }
 
 // NewLogger opens the main log file, creating its directory if needed.
-func NewLogger(cfg LogConfig) (*Logger, error) {
+func NewLogger(cfg Config) (*Logger, error) {
 	if cfg.File == "" {
 		return nil, errors.New("log: file path is empty")
 	}
@@ -84,7 +84,7 @@ func NewLogger(cfg LogConfig) (*Logger, error) {
 
 // newLoggerWithWriter builds a logger that writes the main log to w without
 // rotation. Capture still goes to <cfg.File>.jsonl when cfg.File is set.
-func newLoggerWithWriter(w io.Writer, cfg LogConfig) *Logger {
+func NewWithWriter(w io.Writer, cfg Config) *Logger {
 	return &Logger{cfg: cfg, main: w}
 }
 
@@ -295,7 +295,7 @@ func rotate(path string, maxBytes int64, keep int) error {
 
 // maskHeaders copies h, replacing the values of credential-bearing headers
 // with "***". The header names are compared case-insensitively.
-func maskHeaders(h http.Header) map[string][]string {
+func MaskHeaders(h http.Header) map[string][]string {
 	masked := make(map[string][]string, len(h))
 	for name, values := range h {
 		if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "x-api-key") {
@@ -305,4 +305,23 @@ func maskHeaders(h http.Header) map[string][]string {
 		masked[name] = append([]string(nil), values...)
 	}
 	return masked
+}
+
+// Config is the "log" section of config.json.
+type Config struct {
+	File         string  `json:"file"`
+	Level        string  `json:"level"`
+	MaxMB        int     `json:"max_mb"`
+	Keep         int     `json:"keep"`
+	Capture      Capture `json:"capture"`
+	MaxBodyBytes int64   `json:"max_body_bytes"`
+}
+
+// Capture controls which parts of a request/response pair are written to the
+// capture .jsonl. Every switch works on its own.
+type Capture struct {
+	RequestHeaders  bool `json:"request_headers"`
+	RequestBody     bool `json:"request_body"`
+	ResponseHeaders bool `json:"response_headers"`
+	ResponseBody    bool `json:"response_body"`
 }

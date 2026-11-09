@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/reqlog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func TestRouterSendsAdminToAdmin(t *testing.T) {
 	defer up.Close()
 
 	cfg := testConfig(up.URL)
-	p := NewProxy(cfg, testRegistry(t), newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 	router := buildRouter(p)
 
 	rec := httptest.NewRecorder()
@@ -44,7 +45,7 @@ func TestRouterSendsV1Upstream(t *testing.T) {
 	defer up.Close()
 
 	cfg := testConfig(up.URL)
-	p := NewProxy(cfg, testRegistry(t), newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 	router := buildRouter(p)
 
 	rec := httptest.NewRecorder()
@@ -68,7 +69,7 @@ func TestRouterAnswersHelloProbeLocally(t *testing.T) {
 	defer up.Close()
 
 	cfg := testConfig(up.URL)
-	p := NewProxy(cfg, testRegistry(t), newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 	router := buildRouter(p)
 
 	rec := httptest.NewRecorder()

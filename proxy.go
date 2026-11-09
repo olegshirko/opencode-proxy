@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
 	"opencode-proxy/internal/thinking"
@@ -67,7 +68,7 @@ type ModelCost struct {
 type Proxy struct {
 	cfg    *ConfigLoader
 	reg    *Registry
-	log    *Logger
+	log    *reqlog.Logger
 	client *http.Client
 
 	requests    atomic.Int64
@@ -92,10 +93,10 @@ type Proxy struct {
 
 	// onRecord observes every logged record. It is a test seam; production
 	// code leaves it nil.
-	onRecord func(RequestRecord)
+	onRecord func(reqlog.RequestRecord)
 }
 
-func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client) *Proxy {
+func NewProxy(cfg *ConfigLoader, reg *Registry, log *reqlog.Logger, client *http.Client) *Proxy {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -254,7 +255,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		modelIn, modelOut, why string
-		capture                *CaptureRecord
+		capture                *reqlog.CaptureRecord
 		acc                    usageAccumulator
 		status, attempts       int
 		aborted, billable      = false, true
@@ -273,7 +274,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// allowance, not the list price.
 			p.usage.Add(model, acc.allowance, now)
 		}
-		rec := RequestRecord{
+		rec := reqlog.RequestRecord{
 			ID: newRequestID(), Method: r.Method, Path: r.URL.Path, Session: session,
 			ModelIn: modelIn, ModelOut: modelOut, Why: why,
 			Status: status, Attempt: attempts, Duration: time.Since(start),
@@ -409,7 +410,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		status, attempts = res.status, res.attempts
 		if capture != nil && cfg.Log.Capture.ResponseHeaders {
-			capture.ResponseHeaders = maskHeaders(res.header)
+			capture.ResponseHeaders = reqlog.MaskHeaders(res.header)
 		}
 		copyHeaders(w.Header(), res.header)
 		w.WriteHeader(res.status)
@@ -436,7 +437,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	status = resp.StatusCode
 	if capture != nil && cfg.Log.Capture.ResponseHeaders {
-		capture.ResponseHeaders = maskHeaders(resp.Header)
+		capture.ResponseHeaders = reqlog.MaskHeaders(resp.Header)
 	}
 	if status >= 200 && status < 300 {
 		p.applyQuota(w.Header(), cfg)
@@ -641,7 +642,7 @@ func parseRetryAfter(v string) time.Duration {
 // relayResponse streams the upstream body to the client, flushing every
 // chunk, while parsing usage for the request log and capturing the body when
 // requested. It reports whether the client went away.
-func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *CaptureRecord, cfg *Config, modelIn string) (usageAccumulator, bool) {
+func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *reqlog.CaptureRecord, cfg *Config, modelIn string) (usageAccumulator, bool) {
 	var (
 		parser   *sseParser
 		raw      bytes.Buffer
@@ -1067,14 +1068,14 @@ func parseUsageJSON(body []byte) usageAccumulator {
 	return acc
 }
 
-func newCaptureRecord(cfg *Config, header http.Header, body []byte) *CaptureRecord {
+func newCaptureRecord(cfg *Config, header http.Header, body []byte) *reqlog.CaptureRecord {
 	cc := cfg.Log.Capture
 	if !cc.RequestHeaders && !cc.RequestBody && !cc.ResponseHeaders && !cc.ResponseBody {
 		return nil
 	}
-	rec := &CaptureRecord{}
+	rec := &reqlog.CaptureRecord{}
 	if cc.RequestHeaders {
-		rec.RequestHeaders = maskHeaders(header)
+		rec.RequestHeaders = reqlog.MaskHeaders(header)
 	}
 	if cc.RequestBody {
 		rec.RequestBody, rec.Truncated = truncateBody(body, cfg.Log.MaxBodyBytes)
@@ -1082,7 +1083,7 @@ func newCaptureRecord(cfg *Config, header http.Header, body []byte) *CaptureReco
 	return rec
 }
 
-func fillCapturedBody(rec *CaptureRecord, cfg *Config, body []byte) {
+func fillCapturedBody(rec *reqlog.CaptureRecord, cfg *Config, body []byte) {
 	if rec == nil || !cfg.Log.Capture.ResponseBody {
 		return
 	}

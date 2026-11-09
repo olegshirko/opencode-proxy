@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/scheduler"
 	"os"
 	"os/signal"
@@ -87,7 +88,7 @@ func main() {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
 
-	logger, err := NewLogger(loader.Get().Log)
+	logger, err := reqlog.NewLogger(loader.Get().Log)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}

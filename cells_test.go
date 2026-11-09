@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
 	"strings"
@@ -71,7 +72,7 @@ func TestForwardsEveryAnthropicHeader(t *testing.T) {
 
 func TestModelsEndpointListsPickers(t *testing.T) {
 	cfg := testConfig("http://127.0.0.1:1")
-	p := NewProxy(cfg, testRegistry(t), newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 	router := buildRouter(p)
 
 	rec := httptest.NewRecorder()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func newAdminHarness(t *testing.T, mutate ...func(*Config)) *Proxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := newLoggerWithWriter(&bytes.Buffer{}, loader.Get().Log)
+	logger := reqlog.NewWithWriter(&bytes.Buffer{}, loader.Get().Log)
 	return NewProxy(loader, testRegistry(t), logger, &http.Client{})
 }
 
@@ -102,7 +103,7 @@ func TestAdminPutCaptureTogglesAndPersists(t *testing.T) {
 		t.Fatalf("PUT status = %d, want 200: %s", rec.Code, rec.Body)
 	}
 
-	got := decodeJSON[CaptureConfig](t, adminDo(t, p, http.MethodGet, "/admin/log/capture", "", nil))
+	got := decodeJSON[reqlog.Capture](t, adminDo(t, p, http.MethodGet, "/admin/log/capture", "", nil))
 	if !got.RequestHeaders || !got.ResponseBody {
 		t.Errorf("capture = %+v, want request_headers and response_body", got)
 	}

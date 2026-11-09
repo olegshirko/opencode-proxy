@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/reqlog"
 	"sync/atomic"
 	"testing"
 )
@@ -67,7 +68,7 @@ func TestModelsEndpointUsesTheLiveCatalog(t *testing.T) {
 	reg := mustRegistry(t, `{"models":[
 		{"id":"glm-5.3","picker":"claude-GLM-5.3","available":true},
 		{"id":"retired","picker":"claude-Retired","available":false}]}`)
-	p := NewProxy(cfg, reg, newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, reg, reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -96,7 +97,7 @@ func TestModelsEndpointFallsBackToTheSnapshot(t *testing.T) {
 	cfg := testConfig("http://127.0.0.1:1", func(c *Config) {
 		c.Models.CatalogURL = "http://127.0.0.1:1/unreachable"
 	})
-	p := NewProxy(cfg, testRegistry(t), newLoggerWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
+	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 
 	rec := httptest.NewRecorder()
 	buildRouter(p).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))

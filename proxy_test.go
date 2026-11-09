@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
 	"os"
@@ -67,7 +68,7 @@ type harness struct {
 	proxy    *Proxy
 	upstream *httptest.Server
 	logs     *bytes.Buffer
-	records  chan RequestRecord
+	records  chan reqlog.RequestRecord
 }
 
 func newHarness(t *testing.T, handler http.HandlerFunc, mutate ...func(*Config)) *harness {
@@ -77,11 +78,11 @@ func newHarness(t *testing.T, handler http.HandlerFunc, mutate ...func(*Config))
 
 	cfg := testConfig(up.URL, mutate...)
 	logs := &bytes.Buffer{}
-	logger := newLoggerWithWriter(logs, cfg.Get().Log)
+	logger := reqlog.NewWithWriter(logs, cfg.Get().Log)
 	p := NewProxy(cfg, testRegistry(t), logger, &http.Client{})
 
-	h := &harness{proxy: p, upstream: up, logs: logs, records: make(chan RequestRecord, 32)}
-	p.onRecord = func(rec RequestRecord) { h.records <- rec }
+	h := &harness{proxy: p, upstream: up, logs: logs, records: make(chan reqlog.RequestRecord, 32)}
+	p.onRecord = func(rec reqlog.RequestRecord) { h.records <- rec }
 	return h
 }
 
@@ -96,14 +97,14 @@ func (h *harness) do(t *testing.T, method, path, body string, headers map[string
 	return rec
 }
 
-func (h *harness) record(t *testing.T) RequestRecord {
+func (h *harness) record(t *testing.T) reqlog.RequestRecord {
 	t.Helper()
 	select {
 	case rec := <-h.records:
 		return rec
 	case <-time.After(3 * time.Second):
 		t.Fatal("no request record logged")
-		return RequestRecord{}
+		return reqlog.RequestRecord{}
 	}
 }
 
@@ -818,7 +819,7 @@ func TestCaptureMasksHeadersAndTruncates(t *testing.T) {
 		w.Write([]byte(upstreamBody))
 	}, func(c *Config) {
 		c.Log.MaxBodyBytes = 10
-		c.Log.Capture = CaptureConfig{
+		c.Log.Capture = reqlog.Capture{
 			RequestHeaders: true, RequestBody: true,
 			ResponseHeaders: true, ResponseBody: true,
 		}
@@ -1049,7 +1050,7 @@ func TestFillCapturedBodyRecordsTruncation(t *testing.T) {
 	cfg.Log.Capture.ResponseBody = true
 	cfg.Log.MaxBodyBytes = 4
 
-	rec := &CaptureRecord{}
+	rec := &reqlog.CaptureRecord{}
 	fillCapturedBody(rec, &cfg, []byte("abcdefgh"))
 	if rec.ResponseBody != "abcd" {
 		t.Fatalf("captured %q, want abcd", rec.ResponseBody)
@@ -1062,7 +1063,7 @@ func TestFillCapturedBodyRecordsTruncation(t *testing.T) {
 	fillCapturedBody(nil, &cfg, []byte("abc"))
 	off := Defaults()
 	off.Log.Capture.ResponseBody = false
-	rec2 := &CaptureRecord{}
+	rec2 := &reqlog.CaptureRecord{}
 	fillCapturedBody(rec2, &off, []byte("abc"))
 	if rec2.ResponseBody != "" {
 		t.Fatalf("captured body %q with capture disabled", rec2.ResponseBody)

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"opencode-proxy/internal/reqlog"
 	"strings"
 
 	"opencode-proxy/internal/picker"
@@ -152,7 +153,7 @@ type capturePatch struct {
 	ResponseBody    *bool `json:"response_body"`
 }
 
-func applyCapturePatch(c *CaptureConfig, patch capturePatch) {
+func applyCapturePatch(c *reqlog.Capture, patch capturePatch) {
 	if patch.RequestHeaders != nil {
 		c.RequestHeaders = *patch.RequestHeaders
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"opencode-proxy/internal/reqlog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +19,7 @@ type Config struct {
 	Listen                string          `json:"listen"`
 	Upstream              string          `json:"upstream"`
 	SessionFallback       string          `json:"session_fallback"`
-	Log                   LogConfig       `json:"log"`
+	Log                   reqlog.Config   `json:"log"`
 	Models                ModelsConfig    `json:"models"`
 	Retry                 retry.Config    `json:"retry"`
 	Admin                 AdminConfig     `json:"admin"`
@@ -40,22 +41,6 @@ type SchedulerConfig struct {
 	// ThinkingSummaryWaitMS bounds how long a thinking block's start event is
 	// held back while the proxy collects a one-line summary for it.
 	ThinkingSummaryWaitMS int `json:"thinking_summary_wait_ms"`
-}
-
-type LogConfig struct {
-	File         string        `json:"file"`
-	Level        string        `json:"level"`
-	MaxMB        int           `json:"max_mb"`
-	Keep         int           `json:"keep"`
-	Capture      CaptureConfig `json:"capture"`
-	MaxBodyBytes int64         `json:"max_body_bytes"`
-}
-
-type CaptureConfig struct {
-	RequestHeaders  bool `json:"request_headers"`
-	RequestBody     bool `json:"request_body"`
-	ResponseHeaders bool `json:"response_headers"`
-	ResponseBody    bool `json:"response_body"`
 }
 
 // ModelRoute sends one model to a different upstream endpoint with its own
@@ -156,12 +141,12 @@ func Defaults() Config {
 		Listen:          "127.0.0.1:4000",
 		Upstream:        "https://opencode.ai/inference/go/anthropic",
 		SessionFallback: "my-session-1",
-		Log: LogConfig{
+		Log: reqlog.Config{
 			File:         logFile,
 			Level:        "info",
 			MaxMB:        10,
 			Keep:         5,
-			Capture:      CaptureConfig{},
+			Capture:      reqlog.Capture{},
 			MaxBodyBytes: 65536,
 		},
 		Models: ModelsConfig{

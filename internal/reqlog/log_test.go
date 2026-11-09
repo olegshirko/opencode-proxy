@@ -1,4 +1,4 @@
-package main
+package reqlog
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 func TestRequestLineFormat(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLoggerWithWriter(&buf, LogConfig{})
+	l := NewWithWriter(&buf, Config{})
 
 	l.Request(RequestRecord{
 		ID: "a1", Method: "POST", Path: "/v1/messages",
@@ -55,7 +55,7 @@ func TestRequestLineFormat(t *testing.T) {
 
 func TestRequestLineOmitsEmptySessionAndWhy(t *testing.T) {
 	var buf bytes.Buffer
-	l := newLoggerWithWriter(&buf, LogConfig{})
+	l := NewWithWriter(&buf, Config{})
 
 	l.Request(RequestRecord{ID: "b2", Method: "GET", Path: "/health", ModelIn: "m", ModelOut: "m", Status: 200})
 
@@ -77,7 +77,7 @@ func TestMaskHeadersHidesCredentials(t *testing.T) {
 	h.Set("X-Api-Key", "sk-secret")
 	h.Set("Content-Type", "application/json")
 
-	got := maskHeaders(h)
+	got := MaskHeaders(h)
 
 	if v := got["Authorization"]; len(v) != 1 || v[0] != "***" {
 		t.Errorf("Authorization = %v, want [***]", v)
@@ -90,21 +90,21 @@ func TestMaskHeadersHidesCredentials(t *testing.T) {
 	}
 
 	lower := http.Header{"authorization": {"Bearer top-secret"}}
-	if v := maskHeaders(lower)["authorization"]; len(v) != 1 || v[0] != "***" {
+	if v := MaskHeaders(lower)["authorization"]; len(v) != 1 || v[0] != "***" {
 		t.Errorf("lower-case authorization = %v, want [***]", v)
 	}
 
 	if h.Get("Authorization") != "Bearer top-secret" {
-		t.Errorf("maskHeaders modified the input header")
+		t.Errorf("MaskHeaders modified the input header")
 	}
 }
 
 func TestCaptureJSONLWrittenOnlyWhenEnabled(t *testing.T) {
-	cfg := LogConfig{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5}
+	cfg := Config{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5}
 	capturePath := cfg.File + ".jsonl"
 
 	var buf bytes.Buffer
-	l := newLoggerWithWriter(&buf, cfg)
+	l := NewWithWriter(&buf, cfg)
 	l.Request(RequestRecord{ID: "no-capture", Method: "POST", Path: "/v1/messages"})
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -113,7 +113,7 @@ func TestCaptureJSONLWrittenOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("capture file exists without Capture: %v", err)
 	}
 
-	l = newLoggerWithWriter(&buf, cfg)
+	l = NewWithWriter(&buf, cfg)
 	l.Request(RequestRecord{
 		ID: "a2", Method: "POST", Path: "/v1/messages",
 		Capture: &CaptureRecord{
@@ -150,14 +150,14 @@ func TestCaptureJSONLWrittenOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestCaptureBodyIsTruncated(t *testing.T) {
-	cfg := LogConfig{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5, MaxBodyBytes: 65536}
+	cfg := Config{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5, MaxBodyBytes: 65536}
 	body := strings.Repeat("x", 100000)
 
 	// Truncation belongs to the caller: the handler cuts the body to
 	// MaxBodyBytes from the config snapshot and sets Truncated itself.
 	truncated := body[:int(cfg.MaxBodyBytes)]
 
-	l := newLoggerWithWriter(&bytes.Buffer{}, cfg)
+	l := NewWithWriter(&bytes.Buffer{}, cfg)
 	l.Request(RequestRecord{
 		ID:      "big",
 		Capture: &CaptureRecord{RequestBody: truncated, Truncated: true},
@@ -186,10 +186,10 @@ func TestCaptureBodyIsTruncated(t *testing.T) {
 }
 
 func TestCaptureWritesBodyVerbatim(t *testing.T) {
-	cfg := LogConfig{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5, MaxBodyBytes: 65536}
+	cfg := Config{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 10, Keep: 5, MaxBodyBytes: 65536}
 	body := strings.Repeat("x", 100000)
 
-	l := newLoggerWithWriter(&bytes.Buffer{}, cfg)
+	l := NewWithWriter(&bytes.Buffer{}, cfg)
 	l.Request(RequestRecord{ID: "raw", Capture: &CaptureRecord{RequestBody: body}})
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -256,7 +256,7 @@ func TestRotateShiftsAndDropsOldFiles(t *testing.T) {
 
 func TestRotationAppliesToBothFiles(t *testing.T) {
 	t.Run("main log", func(t *testing.T) {
-		cfg := LogConfig{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 1, Keep: 1}
+		cfg := Config{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 1, Keep: 1}
 		l, err := NewLogger(cfg)
 		if err != nil {
 			t.Fatalf("NewLogger: %v", err)
@@ -281,13 +281,13 @@ func TestRotationAppliesToBothFiles(t *testing.T) {
 	})
 
 	t.Run("capture log", func(t *testing.T) {
-		cfg := LogConfig{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 1, Keep: 1}
+		cfg := Config{File: filepath.Join(t.TempDir(), "proxy.log"), MaxMB: 1, Keep: 1}
 		capturePath := cfg.File + ".jsonl"
 		if err := os.WriteFile(capturePath, bytes.Repeat([]byte("x"), 1024*1024), 0o644); err != nil {
 			t.Fatalf("prefill: %v", err)
 		}
 
-		l := newLoggerWithWriter(&bytes.Buffer{}, cfg)
+		l := NewWithWriter(&bytes.Buffer{}, cfg)
 		l.Request(RequestRecord{ID: "r2", Capture: &CaptureRecord{RequestBody: "hi"}})
 		if err := l.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
