@@ -65,9 +65,12 @@ func main() {
 	CleanupStaleTempFiles(filepath.Dir(*configPath), time.Hour)
 
 	modelsPath := filepath.Join(filepath.Dir(*configPath), "models.json")
-	registry, err := models.LoadRegistry(modelsPath)
+	registry, existed, err := loadRegistryOrDefault(modelsPath)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
+	}
+	if !existed {
+		log.Printf("opencode-proxy: models.json не найден — резолвинг через живой каталог; make install скопирует файл")
 	}
 
 	logger, err := reqlog.NewLogger(loader.Get().Log)
@@ -211,4 +214,21 @@ func regModTime(path string) time.Time {
 		return time.Time{}
 	}
 	return info.ModTime()
+}
+
+// loadRegistryOrDefault reads models.json; a missing file is fine on first
+// run — the proxy starts with an empty registry and the live catalog keeps
+// model resolution working. A present-but-broken file is an error.
+func loadRegistryOrDefault(path string) (*models.Registry, bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return &models.Registry{}, false, nil
+		}
+		return nil, false, err
+	}
+	reg, err := models.LoadRegistry(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return reg, true, nil
 }

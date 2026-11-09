@@ -235,3 +235,17 @@ func TestGetReturnsIsolatedCopy(t *testing.T) {
 		t.Fatalf("loader alias mutated through Get: %q", got)
 	}
 }
+
+func TestNewConfigLoaderInitializesMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.json")
+	l, err := NewConfigLoader(path)
+	if err != nil {
+		t.Fatalf("missing config must self-init: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("defaults not written: %v", err)
+	}
+	if l.Get().Listen != Defaults().Listen {
+		t.Fatalf("listen = %q, want the default", l.Get().Listen)
+	}
+}

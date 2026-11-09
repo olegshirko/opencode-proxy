@@ -128,8 +128,19 @@ func With(cfg Config) *ConfigLoader {
 }
 
 // NewConfigLoader reads path into a Config filled with Defaults, then keeps
-// the result for concurrent readers.
+// the result for concurrent readers. A missing file is first-run: the
+// defaults are written to path and used; a present-but-broken file stays an
+// error, because silence would hide real breakage.
 func NewConfigLoader(path string) (*ConfigLoader, error) {
+	if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
+		seed, err := json.MarshalIndent(Defaults(), "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("config: marshal defaults: %w", err)
+		}
+		if err := atomicio.WriteFile(path, append(seed, '\n')); err != nil {
+			return nil, fmt.Errorf("config: write defaults to %s: %w", path, err)
+		}
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: stat %s: %w", path, err)

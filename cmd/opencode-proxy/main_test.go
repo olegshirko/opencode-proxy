@@ -76,3 +76,17 @@ func TestLoadRegistryIfChanged(t *testing.T) {
 		t.Fatal("the fresh registry does not know the new model")
 	}
 }
+
+func TestLoadRegistryOrDefault(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "models.json")
+	reg, existed, err := loadRegistryOrDefault(missing)
+	if err != nil || existed || reg == nil {
+		t.Fatalf("missing file: existed=%v err=%v, want empty registry, no error", existed, err)
+	}
+	// A corrupt existing file stays an error: silence must not hide breakage.
+	bad := filepath.Join(t.TempDir(), "models.json")
+	os.WriteFile(bad, []byte("{nope"), 0o644)
+	if _, _, err := loadRegistryOrDefault(bad); err == nil {
+		t.Fatal("corrupt models.json must error")
+	}
+}
