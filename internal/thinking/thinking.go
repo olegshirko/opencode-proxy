@@ -1,4 +1,4 @@
-package main
+package thinking
 
 import (
 	"bytes"
@@ -9,24 +9,24 @@ import (
 )
 
 const (
-	// thinkingSummaryMaxChars caps the summary the desktop app shows on the
-	// collapsed thinking plate.
-	thinkingSummaryMaxChars = 160
-	// thinkingSummaryMaxBytes stops text accumulation: past this there is
-	// still no complete meaningful line, so the block ships with a generic
-	// summary rather than growing the buffer.
-	thinkingSummaryMaxBytes = 256
-	// thinkingSummaryFallback is used when no meaningful line was collected
-	// within the wait window.
-	thinkingSummaryFallback = "Thinking"
+	// MaxChars caps the summary the desktop app shows on the collapsed
+	// thinking plate.
+	MaxChars = 160
+	// MaxBytes stops text accumulation: past this there is still no complete
+	// meaningful line, so the block ships with a generic summary rather than
+	// growing the buffer.
+	MaxBytes = 256
+	// FallbackSummary is used when no meaningful line was collected within
+	// the wait window.
+	FallbackSummary = "Thinking"
 )
 
 var markdownLink = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 var listMarker = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+`)
 
-// firstMeaningfulLine returns the first readable line of a thinking text,
+// FirstMeaningfulLine returns the first readable line of a thinking text,
 // stripped of markdown decoration, or "" when there is none yet.
-func firstMeaningfulLine(text string) string {
+func FirstMeaningfulLine(text string) string {
 	for _, line := range strings.Split(text, "\n") {
 		line = cleanMarkdownLine(line)
 		if line != "" {
@@ -48,7 +48,7 @@ func cleanMarkdownLine(line string) string {
 	return strings.TrimSpace(s)
 }
 
-func truncateRunes(s string, max int) string {
+func Truncate(s string, max int) string {
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s
@@ -56,9 +56,9 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
-// stripThinkingSummaries removes summary injections from the conversation
+// StripSummaries removes summary injections from the conversation
 // history: they exist for the desktop UI and must not leak back upstream.
-func stripThinkingSummaries(data map[string]any) {
+func StripSummaries(data map[string]any) {
 	messages, ok := data["messages"].([]any)
 	if !ok {
 		return
@@ -82,9 +82,9 @@ func stripThinkingSummaries(data map[string]any) {
 	}
 }
 
-// addThinkingSummariesJSON injects a one-line summary into every thinking
+// AddSummariesJSON injects a one-line summary into every thinking
 // block of a non-streaming response, so the app renders it collapsed.
-func addThinkingSummariesJSON(body []byte) []byte {
+func AddSummariesJSON(body []byte) []byte {
 	if len(body) == 0 || !json.Valid(body) {
 		return body
 	}
@@ -106,11 +106,11 @@ func addThinkingSummariesJSON(body []byte) []byte {
 			continue
 		}
 		text, _ := blk["thinking"].(string)
-		sum := firstMeaningfulLine(text)
+		sum := FirstMeaningfulLine(text)
 		if sum == "" {
-			sum = thinkingSummaryFallback
+			sum = FallbackSummary
 		}
-		blk["summaries"] = []map[string]string{{"type": "summary_text", "summary": truncateRunes(sum, thinkingSummaryMaxChars)}}
+		blk["summaries"] = []map[string]string{{"type": "summary_text", "summary": Truncate(sum, MaxChars)}}
 		changed = true
 	}
 	if !changed {
@@ -123,22 +123,22 @@ func addThinkingSummariesJSON(body []byte) []byte {
 	return out
 }
 
-// thinkingHold is the state of a thinking block whose content_block_start is
+// Hold is the state of a thinking block whose content_block_start is
 // being held back while its summary is collected. Only the start event is
 // delayed; deltas and stop keep their order, they are buffered with it.
-type thinkingHold struct {
-	wait    time.Duration
-	started time.Time
-	line    []byte
-	index   int
-	deltas  [][]byte
-	text    bytes.Buffer
-	// timer releases the hold when the model pauses between thinking bursts;
+type Hold struct {
+	Wait    time.Duration
+	Started time.Time
+	Line    []byte
+	Index   int
+	Deltas  [][]byte
+	Text    bytes.Buffer
+	// Timer releases the hold when the model pauses between thinking bursts;
 	// without it a long gap would keep the block from reaching the client.
-	timer *time.Timer
+	Timer *time.Timer
 }
 
-func maybeHoldThinkingStart(line []byte, wait time.Duration) *thinkingHold {
+func NewHold(line []byte, wait time.Duration) *Hold {
 	if wait <= 0 {
 		return nil
 	}
@@ -160,17 +160,17 @@ func maybeHoldThinkingStart(line []byte, wait time.Duration) *thinkingHold {
 	if ev.Type != "content_block_start" || ev.ContentBlock.Type != "thinking" || len(ev.ContentBlock.Summaries) > 0 {
 		return nil
 	}
-	return &thinkingHold{
-		wait:    wait,
-		started: time.Now(),
-		line:    append([]byte(nil), line...),
-		index:   ev.Index,
+	return &Hold{
+		Wait:    wait,
+		Started: time.Now(),
+		Line:    append([]byte(nil), line...),
+		Index:   ev.Index,
 	}
 }
 
-// isDeltaFor reports whether the line is a content_block_delta of the given
+// IsDeltaFor reports whether the line is a content_block_delta of the given
 // delta type for the held block index.
-func isDeltaFor(line []byte, index int, kind string) bool {
+func IsDeltaFor(line []byte, index int, kind string) bool {
 	payload, ok := sseDataPayload(line)
 	if !ok {
 		return false
@@ -188,20 +188,21 @@ func isDeltaFor(line []byte, index int, kind string) bool {
 	return ev.Type == "content_block_delta" && ev.Delta.Type == kind && ev.Index == index
 }
 
-func isThinkingDeltaFor(line []byte, index int) bool {
-	return isDeltaFor(line, index, "thinking_delta")
+// IsDelta reports whether the line is a thinking_delta for this held block.
+func (h *Hold) IsDelta(line []byte) bool {
+	return IsDeltaFor(line, h.Index, "thinking_delta")
 }
 
-// isAmongHeldLines reports whether the line is part of the SSE envelope or the
+// IsRelated reports whether the line is part of the SSE envelope or the
 // thinking block itself, and so must travel with a held content_block_start
 // instead of ending the hold. Without this an "event: content_block_delta"
 // line would ship the start before any thinking text was seen, and every
 // summary would fall back to the generic one.
-func isAmongHeldLines(line []byte, index int) bool {
+func IsRelated(line []byte, index int) bool {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return true
 	}
-	if isThinkingDeltaFor(line, index) || isDeltaFor(line, index, "signature_delta") {
+	if IsDeltaFor(line, index, "thinking_delta") || IsDeltaFor(line, index, "signature_delta") {
 		return true
 	}
 	switch {
@@ -214,7 +215,7 @@ func isAmongHeldLines(line []byte, index int) bool {
 	return false
 }
 
-func thinkingDeltaText(line []byte) string {
+func DeltaText(line []byte) string {
 	payload, ok := sseDataPayload(line)
 	if !ok {
 		return ""
@@ -243,9 +244,9 @@ func sseDataPayload(line []byte) ([]byte, bool) {
 	return payload, true
 }
 
-// withThinkingSummary injects the collected summary into a held
+// WithSummary injects the collected summary into a held
 // content_block_start line.
-func withThinkingSummary(line []byte, summary string) []byte {
+func WithSummary(line []byte, summary string) []byte {
 	payload, ok := sseDataPayload(line)
 	if !ok {
 		return line

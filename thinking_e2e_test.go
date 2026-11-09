@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"opencode-proxy/internal/thinking"
 	"strings"
 	"testing"
 	"time"
@@ -108,41 +109,6 @@ func TestSummariesStrippedFromHistory(t *testing.T) {
 	}
 }
 
-func TestCleanMarkdownLine(t *testing.T) {
-	cases := map[string]string{
-		"## Heading":         "Heading",
-		"- bullet point":     "bullet point",
-		"1. numbered":        "numbered",
-		"`code` note":        "code note",
-		"[link](http://x)":   "link",
-		"  spaced  ":         "spaced",
-		"":                   "",
-		"###":                "",
-		"plain text":         "plain text",
-		"see [docs](/d) now": "see docs now",
-	}
-	for in, want := range cases {
-		if got := cleanMarkdownLine(in); got != want {
-			t.Errorf("cleanMarkdownLine(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestFirstMeaningfulLineSkipsDecorations(t *testing.T) {
-	text := "```\ncode fence\n```\n\n**Real thought**"
-	if got := firstMeaningfulLine(text); got != "code fence" {
-		t.Errorf("firstMeaningfulLine = %q, want the first readable line", got)
-	}
-}
-
-func TestSummaryTruncation(t *testing.T) {
-	long := strings.Repeat("а", 300)
-	got := truncateRunes(long, 160)
-	if len([]rune(got)) != 161 || !strings.HasSuffix(got, "…") {
-		t.Errorf("truncateRunes produced %d runes, want 160 plus the ellipsis", len([]rune(got)))
-	}
-}
-
 func TestHoldReleasesBeforeUnrelatedEvent(t *testing.T) {
 	// A stop event for the held block must flush it first: the client must see
 	// start, then stop, never stop before start.
@@ -225,12 +191,12 @@ func TestExpireHoldShipsAStartWithoutFurtherData(t *testing.T) {
 	var out bytes.Buffer
 	p := &sseParser{out: &out, summaryWait: time.Hour}
 	line := []byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
-	h := maybeHoldThinkingStart(line, time.Hour)
+	h := thinking.NewHold(line, time.Hour)
 	if h == nil {
 		t.Fatal("a thinking start was not held")
 	}
 	p.hold = h
-	h.text.WriteString("Collecting the relevant files")
+	h.Text.WriteString("Collecting the relevant files")
 
 	p.expireHold(h)
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
+	"opencode-proxy/internal/thinking"
 	"strconv"
 	"strings"
 	"sync"
@@ -309,7 +310,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if v, ok := data["stream"].(bool); ok && v {
 				streamReq = true
 			}
-			stripThinkingSummaries(data)
+			thinking.StripSummaries(data)
 			if m, ok := data["model"].(string); ok {
 				target, reason := p.reg.Resolve(m, cfg.Models)
 				// A model the gateway added after the last snapshot is not in
@@ -660,7 +661,7 @@ func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Respon
 			}
 		}
 		body = rewriteModelJSON(body, modelIn)
-		body = addThinkingSummariesJSON(body)
+		body = thinking.AddSummariesJSON(body)
 		aborted := false
 		if _, werr := w.Write(body); werr != nil {
 			aborted = true
@@ -807,13 +808,13 @@ type sseParser struct {
 	// summaryWait bounds how long a thinking block's start event is held back
 	// while a one-line summary is collected. 0 disables the hold.
 	summaryWait time.Duration
-	hold        *thinkingHold
+	hold        *thinking.Hold
 }
 
 func (s *sseParser) Feed(chunk []byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.hold != nil && time.Since(s.hold.started) > s.hold.wait {
+	if s.hold != nil && time.Since(s.hold.Started) > s.hold.Wait {
 		if !s.flushHold() {
 			return false
 		}
@@ -837,24 +838,24 @@ func (s *sseParser) Feed(chunk []byte) bool {
 // buffered with it are replayed in order when it ships.
 func (s *sseParser) emit(line []byte) bool {
 	if s.hold != nil {
-		if isThinkingDeltaFor(line, s.hold.index) {
-			s.hold.deltas = append(s.hold.deltas, append([]byte(nil), line...))
-			s.hold.text.WriteString(thinkingDeltaText(line))
+		if s.hold.IsDelta(line) {
+			s.hold.Deltas = append(s.hold.Deltas, append([]byte(nil), line...))
+			s.hold.Text.WriteString(thinking.DeltaText(line))
 			return s.settleHold()
 		}
 		// Event lines, blank separators and the block's own signature travel
 		// with the held start; anything else means the block is over.
-		if isAmongHeldLines(line, s.hold.index) {
-			s.hold.deltas = append(s.hold.deltas, append([]byte(nil), line...))
+		if thinking.IsRelated(line, s.hold.Index) {
+			s.hold.Deltas = append(s.hold.Deltas, append([]byte(nil), line...))
 			return true
 		}
 		if !s.flushHold() {
 			return false
 		}
 	}
-	if h := maybeHoldThinkingStart(line, s.summaryWait); h != nil {
+	if h := thinking.NewHold(line, s.summaryWait); h != nil {
 		s.hold = h
-		h.timer = time.AfterFunc(h.wait, func() { s.expireHold(h) })
+		h.Timer = time.AfterFunc(h.Wait, func() { s.expireHold(h) })
 		s.processLine(line)
 		return true
 	}
@@ -877,58 +878,58 @@ func (s *sseParser) emit(line []byte) bool {
 // gives it the generic one once the byte cap or the wait budget is spent.
 func (s *sseParser) settleHold() bool {
 	h := s.hold
-	text := h.text.String()
-	sum := firstMeaningfulLine(text)
+	text := h.Text.String()
+	sum := thinking.FirstMeaningfulLine(text)
 	complete := sum != "" && (strings.Contains(text, "\n") ||
 		(len([]rune(sum)) >= 24 && strings.ContainsAny(sum, ".!?")))
 	if complete {
-		return s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
+		return s.flushHoldWith(thinking.Truncate(sum, thinking.MaxChars))
 	}
-	if h.text.Len() >= thinkingSummaryMaxBytes || time.Since(h.started) > h.wait {
+	if h.Text.Len() >= thinking.MaxBytes || time.Since(h.Started) > h.Wait {
 		return s.flushHold()
 	}
 	return true
 }
 
 // expireHold releases a block whose model paused for the whole wait budget.
-func (s *sseParser) expireHold(h *thinkingHold) {
+func (s *sseParser) expireHold(h *thinking.Hold) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.hold != h {
 		return
 	}
-	sum := firstMeaningfulLine(h.text.String())
+	sum := thinking.FirstMeaningfulLine(h.Text.String())
 	if sum == "" {
-		sum = thinkingSummaryFallback
+		sum = thinking.FallbackSummary
 	}
-	s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
+	s.flushHoldWith(thinking.Truncate(sum, thinking.MaxChars))
 }
 
 func (s *sseParser) flushHold() bool {
 	h := s.hold
-	sum := firstMeaningfulLine(h.text.String())
+	sum := thinking.FirstMeaningfulLine(h.Text.String())
 	if sum == "" {
-		sum = thinkingSummaryFallback
+		sum = thinking.FallbackSummary
 	}
-	return s.flushHoldWith(truncateRunes(sum, thinkingSummaryMaxChars))
+	return s.flushHoldWith(thinking.Truncate(sum, thinking.MaxChars))
 }
 
 func (s *sseParser) flushHoldWith(summary string) bool {
 	h := s.hold
 	s.hold = nil
-	if h.timer != nil {
-		h.timer.Stop()
+	if h.Timer != nil {
+		h.Timer.Stop()
 	}
 	if s.out == nil {
 		return true
 	}
-	if _, err := s.out.Write(withThinkingSummary(h.line, summary)); err != nil {
+	if _, err := s.out.Write(thinking.WithSummary(h.Line, summary)); err != nil {
 		return false
 	}
 	if _, err := s.out.Write([]byte("\n")); err != nil {
 		return false
 	}
-	for _, d := range h.deltas {
+	for _, d := range h.Deltas {
 		if _, err := s.out.Write(d); err != nil {
 			return false
 		}
