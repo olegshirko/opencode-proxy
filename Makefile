@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 BIN     := $(CURDIR)/bin/opencode-proxy
 NEW     := $(CURDIR)/bin/opencode-proxy.new
+SL      := $(CURDIR)/bin/statusline
 CONFIG  := $(CURDIR)/config.json
 PLIST   := $(HOME)/Library/LaunchAgents/ai.opencode.proxy.plist
 LABEL   := ai.opencode.proxy
@@ -9,9 +10,13 @@ UID     := $(shell id -u)
 
 # Only this module's packages: the worktree may hold other people's scratch
 # directories, and they must not be able to fail this build.
-PKGS := . ./cmd/... ./internal/...
+PKGS := . ./cmd/... ./internal/... ./statusline
 
-.PHONY: build test smoke install restart uninstall verify models
+.PHONY: build statusline test smoke install restart uninstall verify models
+
+statusline:
+	@mkdir -p $(CURDIR)/bin
+	go build -o $(SL) ./statusline
 
 build:
 	@mkdir -p $(CURDIR)/bin
