@@ -1,0 +1,11 @@
+[Unit]
+Description=opencode-proxy: OpenCode Go gateway for Claude clients
+After=network-online.target
+
+[Service]
+ExecStart=__HOME__/.local/bin/opencode-proxy -config __HOME__/.config/opencode-proxy/config.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
