@@ -400,3 +400,37 @@ func TestRunMainRejectsAnUnknownFlag(t *testing.T) {
 		t.Fatalf("exit = %d, want 2", code)
 	}
 }
+
+func TestWriteSettings(t *testing.T) {
+	models := []model{
+		{ID: "glm-5.3", Picker: "claude-GL-5.3", Label: "GLM 5.3", BehavesAs: "claude-sonnet-5", Available: true},
+		{ID: "blocked", Picker: "claude-Blocked", Label: "Blocked", BehavesAs: "claude-sonnet-5", Available: false},
+	}
+	var out bytes.Buffer
+	if err := writeSettings(&out, "http://127.0.0.1:4000", models); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Env         map[string]string `json:"env"`
+		ModelPicker struct {
+			ReplaceBuiltInOptions bool `json:"replaceBuiltInOptions"`
+			Options               []struct {
+				Model     string `json:"model"`
+				Label     string `json:"label"`
+				BehavesAs string `json:"behavesAs"`
+			} `json:"options"`
+		} `json:"modelPicker"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if doc.Env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:4000" {
+		t.Fatalf("base url = %q", doc.Env["ANTHROPIC_BASE_URL"])
+	}
+	if !doc.ModelPicker.ReplaceBuiltInOptions {
+		t.Fatal("replaceBuiltInOptions must be true")
+	}
+	if len(doc.ModelPicker.Options) != 1 || doc.ModelPicker.Options[0].Model != "claude-GL-5.3" {
+		t.Fatalf("options = %+v, want only the available model", doc.ModelPicker.Options)
+	}
+}

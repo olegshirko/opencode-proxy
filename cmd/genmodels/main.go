@@ -192,6 +192,8 @@ type options struct {
 	tokenFile  string
 	catalogURL string
 	probeURL   string
+	settings   bool
+	proxyURL   string
 }
 
 func main() {
@@ -204,6 +206,8 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	out := fs.String("out", "models.json", "output file")
 	probe := fs.Bool("probe", false, "probe every model and record availability")
+	settings := fs.Bool("settings", false, "print the Claude Code settings block (modelPicker) and exit")
+	proxyURL := fs.String("proxy-url", "http://127.0.0.1:4000", "proxy base URL for the settings block")
 	tokenFile := fs.String("token-file", "", "JSON file holding an Anthropic token (e.g. ~/.claude/settings.json)")
 	catalogURL := fs.String("catalog", defaultCatalogURL, "catalog endpoint")
 	probeURL := fs.String("probe-url", defaultProbeURL, "base URL for the availability probe")
@@ -219,6 +223,8 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 		tokenFile:  *tokenFile,
 		catalogURL: *catalogURL,
 		probeURL:   *probeURL,
+		settings:   *settings,
+		proxyURL:   *proxyURL,
 	}
 	if err := run(ctx, opts, &http.Client{Timeout: 90 * time.Second}, stdout, stderr); err != nil {
 		fmt.Fprintln(stderr, "genmodels:", err)
@@ -255,6 +261,10 @@ func run(ctx context.Context, opts options, hc *http.Client, stdout, stderr io.W
 		}
 	} else {
 		carryAvailability(opts.out, models)
+	}
+
+	if opts.settings {
+		return writeSettings(stdout, opts.proxyURL, models)
 	}
 
 	data, err := json.MarshalIndent(modelFile{Models: models}, "", "  ")
@@ -325,4 +335,46 @@ func carryAvailability(out string, models []model) {
 			models[i].Available = av
 		}
 	}
+}
+
+// writeSettings prints the Claude Code settings block: the env pointing at the
+// proxy and a modelPicker with the models the region actually serves. Only
+// available models are offered — a RegionError on a blocked pick is
+// readable, but silently missing models are not.
+func writeSettings(w io.Writer, proxyURL string, models []model) error {
+	block := struct {
+		Env         map[string]string `json:"env"`
+		ModelPicker struct {
+			ReplaceBuiltInOptions bool             `json:"replaceBuiltInOptions"`
+			Options               []pickerSettings `json:"options"`
+		} `json:"modelPicker"`
+	}{
+		Env: map[string]string{
+			"ANTHROPIC_BASE_URL":   proxyURL,
+			"ANTHROPIC_AUTH_TOKEN": "<your OpenCode Go token>",
+		},
+	}
+	block.ModelPicker.ReplaceBuiltInOptions = true
+	for _, m := range models {
+		if !m.Available {
+			continue
+		}
+		block.ModelPicker.Options = append(block.ModelPicker.Options, pickerSettings{
+			Model:     m.Picker,
+			Label:     m.Label,
+			BehavesAs: m.BehavesAs,
+		})
+	}
+	data, err := json.MarshalIndent(block, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(data, '\n'))
+	return err
+}
+
+type pickerSettings struct {
+	Model     string `json:"model"`
+	Label     string `json:"label"`
+	BehavesAs string `json:"behavesAs,omitempty"`
 }
