@@ -1,10 +1,11 @@
-package main
+package coststore
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"opencode-proxy/internal/atomicio"
 	"os"
 	"sync"
 	"time"
@@ -23,7 +24,7 @@ const costFileVersion = 1
 //
 // There is deliberately no TTL: a session left overnight must still show its
 // cost in the morning. Memory is bounded by evicting the least recently
-// active sessions once the count exceeds maxSessions.
+// active sessions once the count exceeds MaxSessions.
 type CostStore struct {
 	path string
 
@@ -85,7 +86,7 @@ func (s *CostStore) Add(session, model string, usd, listUSD float64, at time.Tim
 		sc.ByModel[model] = mc
 	}
 
-	for len(s.sessions) > maxSessions {
+	for len(s.sessions) > MaxSessions {
 		oldestID := ""
 		var oldest time.Time
 		for id, v := range s.sessions {
@@ -143,7 +144,7 @@ func (s *CostStore) Flush() error {
 		return fmt.Errorf("cost: marshal: %w", err)
 	}
 	data = append(data, '\n')
-	if err := writeFileAtomic(s.path, data); err != nil {
+	if err := atomicio.WriteFile(s.path, data); err != nil {
 		return fmt.Errorf("cost: write %s: %w", s.path, err)
 	}
 
@@ -175,3 +176,25 @@ func (s *CostStore) StartFlusher(ctx context.Context, every time.Duration) <-cha
 	}()
 	return done
 }
+
+// SessionCost is the accumulated cost of one session. USD sums
+// usage.opencode.allowance and ListUSD sums usage.opencode.list_cost.
+type SessionCost struct {
+	Session  string               `json:"session"`
+	USD      float64              `json:"usd"`
+	ListUSD  float64              `json:"list_usd"`
+	Requests int                  `json:"requests"`
+	FirstAt  time.Time            `json:"first_at"`
+	LastAt   time.Time            `json:"last_at"`
+	ByModel  map[string]ModelCost `json:"by_model"`
+}
+
+type ModelCost struct {
+	USD      float64 `json:"usd"`
+	ListUSD  float64 `json:"list_usd"`
+	Requests int     `json:"requests"`
+}
+
+// MaxSessions evicts the least recently used session once the store grows
+// past this many entries.
+const MaxSessions = 1000

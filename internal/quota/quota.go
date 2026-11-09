@@ -1,4 +1,4 @@
-package main
+package quota
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"opencode-proxy/internal/atomicio"
 	"os"
 	"sort"
 	"strconv"
@@ -23,14 +24,14 @@ const (
 	fiveHourWindowLength = 5 * time.Hour
 )
 
-// LimitsConfig maps the OpenCode Go limits onto the three windows the app's
+// Limits maps the OpenCode Go limits onto the three windows the app's
 // Limits panel shows: a 5-hour window that starts on first use, a weekly
 // window, and a monthly window. Go defines them as shares of the monthly
 // amount: 5 hours is 20% of it, a week 50%.
 // https://opencode.ai/docs/console/go
 //
 // MonthlyUSD == 0 disables the whole feature: no quota headers are emitted.
-type LimitsConfig struct {
+type Limits struct {
 	// MonthlyUSD is the dollar limit of the monthly window, which is not the
 	// plan price: a $10 Go plan measures up to about $15 of usage.
 	MonthlyUSD       float64 `json:"monthly_usd"`
@@ -51,7 +52,7 @@ type LimitsConfig struct {
 // fractions returns the window shares with defaults filled in. A zero or
 // out-of-range value falls back to the documented default rather than
 // producing a zero limit that would read as "exhausted".
-func (l LimitsConfig) fractions() (five, week, warn float64) {
+func (l Limits) fractions() (five, week, warn float64) {
 	five, week, warn = l.FiveHourFraction, l.WeeklyFraction, l.WarningFraction
 	if five <= 0 || five > 1 {
 		five = 0.2
@@ -156,7 +157,7 @@ type UsageSnapshot struct {
 //     for five hours, the way the panel describes it ("Starts on first use").
 //   - week: fixed, starting Monday 00:00 UTC.
 //   - month: fixed, anchored at MonthStart (or the calendar month).
-func (l *UsageLedger) Snapshot(limits LimitsConfig, now time.Time) UsageSnapshot {
+func (l *UsageLedger) Snapshot(limits Limits, now time.Time) UsageSnapshot {
 	fiveFrac, weekFrac, warn := limits.fractions()
 	s := UsageSnapshot{
 		MonthlyLimit:  limits.MonthlyUSD,
@@ -277,7 +278,7 @@ func (l *UsageLedger) Flush() error {
 		return fmt.Errorf("usage: marshal: %w", err)
 	}
 	data = append(data, '\n')
-	if err := writeFileAtomic(l.path, data); err != nil {
+	if err := atomicio.WriteFile(l.path, data); err != nil {
 		return fmt.Errorf("usage: write %s: %w", l.path, err)
 	}
 

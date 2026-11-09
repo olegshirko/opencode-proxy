@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/scheduler"
 	"os"
@@ -108,7 +110,7 @@ func main() {
 
 	// Session cost must survive a relaunch: the desktop session outlives the
 	// proxy process, so a zeroed counter would read as a bug.
-	costs, err := NewCostStore(cfg.SessionCostFile)
+	costs, err := coststore.NewCostStore(cfg.SessionCostFile)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
@@ -116,7 +118,7 @@ func main() {
 
 	// The quota ledger turns accumulated allowance into the 5-hour/weekly
 	// headers Claude Code shows as plan usage.
-	usage, err := NewUsageLedger(cfg.UsageFile)
+	usage, err := quota.NewUsageLedger(cfg.UsageFile)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}

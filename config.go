@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"opencode-proxy/internal/atomicio"
+	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/retry"
 )
 
@@ -27,7 +29,7 @@ type Config struct {
 	ConnectTimeoutSeconds int             `json:"connect_timeout_seconds"`
 	SessionCostFile       string          `json:"session_cost_file"`
 	UsageFile             string          `json:"usage_file"`
-	Limits                LimitsConfig    `json:"limits"`
+	Limits                quota.Limits    `json:"limits"`
 }
 
 // SchedulerConfig tunes cell assignment and the keepalive used while retrying.
@@ -181,7 +183,7 @@ func Defaults() Config {
 		},
 		SessionCostFile: filepath.Join(filepath.Dir(logFile), "session-cost.json"),
 		UsageFile:       filepath.Join(filepath.Dir(logFile), "usage.json"),
-		Limits: LimitsConfig{
+		Limits: quota.Limits{
 			MonthlyUSD:       0,
 			FiveHourFraction: 0.2,
 			WeeklyFraction:   0.5,
@@ -278,7 +280,7 @@ func (l *ConfigLoader) Update(fn func(*Config) error) error {
 		return fmt.Errorf("config: marshal: %w", err)
 	}
 	data = append(data, '\n')
-	if err := writeFileAtomic(l.path, data); err != nil {
+	if err := atomicio.WriteFile(l.path, data); err != nil {
 		return fmt.Errorf("config: write %s: %w", l.path, err)
 	}
 
@@ -316,23 +318,4 @@ func (c Config) clone() Config {
 		c.Models.Aliases = aliases
 	}
 	return c
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

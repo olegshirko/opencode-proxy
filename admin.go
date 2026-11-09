@@ -6,7 +6,9 @@ import (
 	"opencode-proxy/internal/reqlog"
 	"strings"
 
+	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/picker"
+
 	"time"
 )
 
@@ -336,19 +338,19 @@ func (p *Proxy) adminReload(w http.ResponseWriter, r *http.Request) {
 }
 
 type sessionCostResponse struct {
-	Session  string               `json:"session"`
-	USD      float64              `json:"usd"`
-	ListUSD  float64              `json:"list_usd"`
-	Requests int                  `json:"requests"`
-	FirstAt  string               `json:"first_at"`
-	LastAt   string               `json:"last_at"`
-	ByModel  map[string]ModelCost `json:"by_model"`
+	Session  string                         `json:"session"`
+	USD      float64                        `json:"usd"`
+	ListUSD  float64                        `json:"list_usd"`
+	Requests int                            `json:"requests"`
+	FirstAt  string                         `json:"first_at"`
+	LastAt   string                         `json:"last_at"`
+	ByModel  map[string]coststore.ModelCost `json:"by_model"`
 }
 
 func (p *Proxy) adminSessionCost(w http.ResponseWriter, r *http.Request) {
 	sc := p.SessionCost(r.URL.Query().Get("session"))
 	if sc.ByModel == nil {
-		sc.ByModel = map[string]ModelCost{}
+		sc.ByModel = map[string]coststore.ModelCost{}
 	}
 	writeJSON(w, http.StatusOK, sessionCostResponse{
 		Session:  sc.Session,

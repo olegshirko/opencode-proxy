@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
@@ -794,7 +795,7 @@ func TestSessionCostUnknownSessionIsZero(t *testing.T) {
 func TestSessionCostEvictsOldestAboveLimit(t *testing.T) {
 	p := NewProxy(nil, nil, nil, nil)
 	base := time.Now().Add(-time.Hour)
-	for i := 0; i < maxSessions+1; i++ {
+	for i := 0; i < coststore.MaxSessions+1; i++ {
 		p.addSessionCost(fmt.Sprintf("s%d", i), "m", 1, 2, base.Add(time.Duration(i)*time.Millisecond))
 	}
 	if got := p.SessionCost("s0").Requests; got != 0 {
@@ -1003,7 +1004,7 @@ func TestQueueTimeoutAnswersOverloaded(t *testing.T) {
 
 func TestSetCostStoreReplacesTheStore(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {})
-	store, err := NewCostStore("")
+	store, err := coststore.NewCostStore("")
 	if err != nil {
 		t.Fatal(err)
 	}

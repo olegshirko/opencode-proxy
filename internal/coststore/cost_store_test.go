@@ -1,4 +1,4 @@
-package main
+package coststore
 
 import (
 	"context"
@@ -59,7 +59,7 @@ func TestCostStoreEvictsOldestByLastAt(t *testing.T) {
 
 	// Oldest first, then enough newer ones to overflow the cap.
 	store.Add("oldest", "m", 1, 1, base)
-	for i := 0; i < maxSessions; i++ {
+	for i := 0; i < MaxSessions; i++ {
 		store.Add("s"+string(rune('a'+i%26))+time.Duration(i).String(), "m", 1, 1, base.Add(time.Duration(i+1)*time.Second))
 	}
 
@@ -69,8 +69,8 @@ func TestCostStoreEvictsOldestByLastAt(t *testing.T) {
 	store.mu.Lock()
 	n := len(store.sessions)
 	store.mu.Unlock()
-	if n > maxSessions {
-		t.Errorf("store holds %d sessions, cap is %d", n, maxSessions)
+	if n > MaxSessions {
+		t.Errorf("store holds %d sessions, cap is %d", n, MaxSessions)
 	}
 }
 

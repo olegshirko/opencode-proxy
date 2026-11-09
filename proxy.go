@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
@@ -23,7 +25,6 @@ import (
 
 const (
 	tokenCacheTTL  = 60 * time.Second
-	maxSessions    = 1000
 	copyBufferSize = 32 * 1024
 	// countTokensConcurrency is how many token counts may run at once. They
 	// are cheap and never prefill, but an unbounded burst would still compete
@@ -43,24 +44,6 @@ type Stats struct {
 	CellLimit       int
 	QueueWaitMS     int64
 	Keepalives      int64
-}
-
-// SessionCost is the accumulated cost of one session. USD sums
-// usage.opencode.allowance and ListUSD sums usage.opencode.list_cost.
-type SessionCost struct {
-	Session  string               `json:"session"`
-	USD      float64              `json:"usd"`
-	ListUSD  float64              `json:"list_usd"`
-	Requests int                  `json:"requests"`
-	FirstAt  time.Time            `json:"first_at"`
-	LastAt   time.Time            `json:"last_at"`
-	ByModel  map[string]ModelCost `json:"by_model"`
-}
-
-type ModelCost struct {
-	USD      float64 `json:"usd"`
-	ListUSD  float64 `json:"list_usd"`
-	Requests int     `json:"requests"`
 }
 
 // Proxy is the HTTP handler that forwards Anthropic API calls to the OpenCode
@@ -86,8 +69,8 @@ type Proxy struct {
 	// flood the gateway when the app asks for many bodies at once.
 	countSlots chan struct{}
 
-	costs *CostStore
-	usage *UsageLedger
+	costs *coststore.CostStore
+	usage *quota.UsageLedger
 
 	sched *scheduler.CellScheduler
 
@@ -100,7 +83,7 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *reqlog.Logger, client *http
 	if client == nil {
 		client = &http.Client{}
 	}
-	store, _ := NewCostStore("")
+	store, _ := coststore.NewCostStore("")
 	return &Proxy{
 		cfg:        cfg,
 		reg:        reg,
@@ -122,20 +105,20 @@ func (p *Proxy) SetScheduler(s *scheduler.CellScheduler) {
 
 // SetCostStore swaps the cost store, which main uses to give the proxy a
 // persistent one.
-func (p *Proxy) SetCostStore(s *CostStore) {
+func (p *Proxy) SetCostStore(s *coststore.CostStore) {
 	p.costs = s
 }
 
 // SetUsageLedger gives the proxy the spend history used for the quota headers
 // Claude Code reads. Without it no quota headers are emitted.
-func (p *Proxy) SetUsageLedger(l *UsageLedger) {
+func (p *Proxy) SetUsageLedger(l *quota.UsageLedger) {
 	p.usage = l
 }
 
 // Quota reports the current spend rolled up into the quota windows.
-func (p *Proxy) Quota(limits LimitsConfig, now time.Time) UsageSnapshot {
+func (p *Proxy) Quota(limits quota.Limits, now time.Time) quota.UsageSnapshot {
 	if p.usage == nil {
-		return UsageSnapshot{}
+		return quota.UsageSnapshot{}
 	}
 	return p.usage.Snapshot(limits, now)
 }
@@ -159,7 +142,7 @@ func (p *Proxy) Stats() Stats {
 
 // SessionCost returns a copy of the cost record for session. An unknown
 // session yields a zero record rather than an error.
-func (p *Proxy) SessionCost(session string) SessionCost {
+func (p *Proxy) SessionCost(session string) coststore.SessionCost {
 	return p.costs.Get(session)
 }
 
