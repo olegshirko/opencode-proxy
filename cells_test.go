@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/retry"
 	"strings"
 	"testing"
+
 	"time"
 )
 
@@ -130,7 +132,7 @@ func TestStreamSendsPingsWhileRetrying(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}, func(c *Config) {
-		c.Retry = RetryConfig{MaxAttempts: 3, FirstWaitMS: 120, Multiplier: 1, MaxWaitMS: 200, TotalBudgetMS: 5000}
+		c.Retry = retry.Config{MaxAttempts: 3, FirstWaitMS: 120, Multiplier: 1, MaxWaitMS: 200, TotalBudgetMS: 5000}
 		c.Scheduler = SchedulerConfig{
 			MaxConcurrentCells:  8,
 			QueueTimeoutMS:      1000,
@@ -160,7 +162,7 @@ func TestStreamErrorEventWhenRetriesExhausted(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"at capacity"}}`))
 	}, func(c *Config) {
-		c.Retry = RetryConfig{MaxAttempts: 2, FirstWaitMS: 80, Multiplier: 1, MaxWaitMS: 100, TotalBudgetMS: 5000}
+		c.Retry = retry.Config{MaxAttempts: 2, FirstWaitMS: 80, Multiplier: 1, MaxWaitMS: 100, TotalBudgetMS: 5000}
 		c.Scheduler = SchedulerConfig{
 			MaxConcurrentCells:  8,
 			QueueTimeoutMS:      1000,

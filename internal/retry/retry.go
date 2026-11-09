@@ -1,4 +1,4 @@
-package main
+package retry
 
 import (
 	"math"
@@ -9,6 +9,15 @@ import (
 	"strings"
 	"time"
 )
+
+// Config is the "retry" section of config.json.
+type Config struct {
+	MaxAttempts   int     `json:"max_attempts"`
+	FirstWaitMS   int     `json:"first_wait_ms"`
+	Multiplier    float64 `json:"multiplier"`
+	MaxWaitMS     int     `json:"max_wait_ms"`
+	TotalBudgetMS int     `json:"total_budget_ms"`
+}
 
 // RetryPolicy holds the pure retry arithmetic. It never sleeps; the caller
 // (the proxy handler) owns the loop and the time.Sleep calls.
@@ -24,7 +33,7 @@ type RetryPolicy struct {
 
 // NewRetryPolicy builds a policy from config. Jitter is fixed at ±20%. A nil
 // rnd is replaced with a source seeded from the current time.
-func NewRetryPolicy(cfg RetryConfig, rnd *rand.Rand) RetryPolicy {
+func NewRetryPolicy(cfg Config, rnd *rand.Rand) RetryPolicy {
 	if rnd == nil {
 		rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}

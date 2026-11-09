@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/retry"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -129,7 +130,7 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Con
 	if kaInterval <= 0 {
 		kaInterval = 5 * time.Second
 	}
-	policy := NewRetryPolicy(cfg.Retry, nil)
+	policy := retry.NewRetryPolicy(cfg.Retry, nil)
 	budget := time.Duration(cfg.Retry.TotalBudgetMS) * time.Millisecond
 	maxAttempts := cfg.Retry.MaxAttempts
 	if maxAttempts < 1 {
@@ -212,7 +213,7 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Con
 			return resp.StatusCode, attempt, acc, aborted
 		}
 
-		retryable := ShouldRetryResponse(resp)
+		retryable := retry.ShouldRetryResponse(resp)
 		if retryable {
 			p.sched.ReportFailure(cell)
 		}

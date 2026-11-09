@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"opencode-proxy/internal/retry"
 )
 
 // Config is the proxy configuration. It lives in one JSON file that is
@@ -18,7 +20,7 @@ type Config struct {
 	SessionFallback       string          `json:"session_fallback"`
 	Log                   LogConfig       `json:"log"`
 	Models                ModelsConfig    `json:"models"`
-	Retry                 RetryConfig     `json:"retry"`
+	Retry                 retry.Config    `json:"retry"`
 	Admin                 AdminConfig     `json:"admin"`
 	Scheduler             SchedulerConfig `json:"scheduler"`
 	ConnectTimeoutSeconds int             `json:"connect_timeout_seconds"`
@@ -137,14 +139,6 @@ func (m ModelsConfig) RouteNamed(name string) *ModelRoute {
 	return nil
 }
 
-type RetryConfig struct {
-	MaxAttempts   int     `json:"max_attempts"`
-	FirstWaitMS   int     `json:"first_wait_ms"`
-	Multiplier    float64 `json:"multiplier"`
-	MaxWaitMS     int     `json:"max_wait_ms"`
-	TotalBudgetMS int     `json:"total_budget_ms"`
-}
-
 type AdminConfig struct {
 	Enabled bool   `json:"enabled"`
 	Token   string `json:"token"`
@@ -179,7 +173,7 @@ func Defaults() Config {
 				"claude-sonnet-5":   "deepseek-v4.1-flash",
 			},
 		},
-		Retry: RetryConfig{
+		Retry: retry.Config{
 			MaxAttempts:   5,
 			FirstWaitMS:   2000,
 			Multiplier:    2,

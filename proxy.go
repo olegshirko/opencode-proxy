@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/retry"
 	"strconv"
 	"strings"
 	"sync"
@@ -527,7 +528,7 @@ func copyHeaders(dst, src http.Header) {
 // response (whose headers have not been written to the client yet) and the
 // number of attempts made.
 func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*http.Request, error), cell string) (*http.Response, int, error) {
-	policy := NewRetryPolicy(cfg.Retry, nil)
+	policy := retry.NewRetryPolicy(cfg.Retry, nil)
 	maxAttempts := cfg.Retry.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -556,10 +557,10 @@ func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*htt
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			p.sched.ReportSuccess(cell)
-		} else if ShouldRetryResponse(resp) {
+		} else if retry.ShouldRetryResponse(resp) {
 			p.sched.ReportFailure(cell)
 		}
-		if !ShouldRetryResponse(resp) || attempt >= maxAttempts {
+		if !retry.ShouldRetryResponse(resp) || attempt >= maxAttempts {
 			return resp, attempt, nil
 		}
 

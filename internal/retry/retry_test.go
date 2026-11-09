@@ -1,4 +1,4 @@
-package main
+package retry
 
 import (
 	"math/rand"
@@ -8,8 +8,8 @@ import (
 )
 
 // testRetryConfig mirrors the defaults shipped in config.json.
-func testRetryConfig() RetryConfig {
-	return RetryConfig{
+func testRetryConfig() Config {
+	return Config{
 		MaxAttempts:   5,
 		FirstWaitMS:   2000,
 		Multiplier:    2,

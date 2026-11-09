@@ -10,12 +10,14 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/retry"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+
 	"time"
 )
 
@@ -44,7 +46,7 @@ func testConfig(upstream string, mutate ...func(*Config)) *ConfigLoader {
 	cfg.Log.File = ""
 	cfg.Log.MaxBodyBytes = 1 << 20
 	cfg.SessionFallback = "fallback-session"
-	cfg.Retry = RetryConfig{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}
+	cfg.Retry = retry.Config{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}
 	cfg.Models = ModelsConfig{
 		Default:    "deepseek-v4.1-flash",
 		Background: "deepseek-v4.1-flash",
@@ -56,7 +58,7 @@ func testConfig(upstream string, mutate ...func(*Config)) *ConfigLoader {
 	return &ConfigLoader{cfg: cfg}
 }
 
-func withRetry(rc RetryConfig) func(*Config) {
+func withRetry(rc retry.Config) func(*Config) {
 	return func(c *Config) { c.Retry = rc }
 }
 
@@ -221,7 +223,7 @@ func TestRetriesOn429ThenSucceeds(t *testing.T) {
 			return
 		}
 		w.Write([]byte("ok"))
-	}, withRetry(RetryConfig{MaxAttempts: 5, FirstWaitMS: 10, Multiplier: 2, MaxWaitMS: 100, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 5, FirstWaitMS: 10, Multiplier: 2, MaxWaitMS: 100, TotalBudgetMS: 5000}))
 
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if res.Code != http.StatusOK || res.Body.String() != "ok" {
@@ -245,7 +247,7 @@ func TestGivesUpAfterMaxAttempts(t *testing.T) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte("busy"))
-	}, withRetry(RetryConfig{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 1, MaxWaitMS: 5, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 1, MaxWaitMS: 5, TotalBudgetMS: 5000}))
 
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if res.Code != http.StatusTooManyRequests || res.Body.String() != "busy" {
@@ -269,7 +271,7 @@ func TestRetryHonoursTotalBudget(t *testing.T) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte("busy"))
-	}, withRetry(RetryConfig{MaxAttempts: 5, FirstWaitMS: 2000, Multiplier: 2, MaxWaitMS: 2000, TotalBudgetMS: 300}))
+	}, withRetry(retry.Config{MaxAttempts: 5, FirstWaitMS: 2000, Multiplier: 2, MaxWaitMS: 2000, TotalBudgetMS: 300}))
 
 	start := time.Now()
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
@@ -295,7 +297,7 @@ func TestDoesNotRetry404(t *testing.T) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte("nope"))
-	}, withRetry(RetryConfig{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
 
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if res.Code != http.StatusNotFound || res.Body.String() != "nope" {
@@ -318,7 +320,7 @@ func TestUpstreamShouldRetryFalseStopsRetries(t *testing.T) {
 		w.Header().Set("X-Should-Retry", "false")
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte("busy"))
-	}, withRetry(RetryConfig{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
 
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if res.Code != http.StatusTooManyRequests {
@@ -344,7 +346,7 @@ func TestUpstreamShouldRetryTrueForcesRetries(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ok":true}`))
-	}, withRetry(RetryConfig{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
 
 	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if res.Code != http.StatusOK {
@@ -744,7 +746,7 @@ func TestSessionCostIgnoresRetriesAndFailures(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"usage":{"opencode":{"list_cost":5,"allowance":5}}}`))
 		}
-	}, withRetry(RetryConfig{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 1, MaxWaitMS: 5, TotalBudgetMS: 5000}))
+	}, withRetry(retry.Config{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 1, MaxWaitMS: 5, TotalBudgetMS: 5000}))
 
 	headers := map[string]string{"X-Claude-Code-Session-Id": "s2"}
 	if res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, headers); res.Code != http.StatusOK {
@@ -919,7 +921,7 @@ func TestPrefillRefusalTightensTheCeiling(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"prefill_cap_refused, retry after 30 s"}}`))
-	}, withRetry(RetryConfig{MaxAttempts: 1, TotalBudgetMS: 1}))
+	}, withRetry(retry.Config{MaxAttempts: 1, TotalBudgetMS: 1}))
 	h.proxy.SetScheduler(NewCellScheduler(8))
 
 	rec := h.do(t, http.MethodPost, "/v1/messages",
@@ -945,7 +947,7 @@ func TestAllowanceRefusalLeavesTheCeilingAlone(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"monthly allowance exhausted"}}`))
-	}, withRetry(RetryConfig{MaxAttempts: 1, TotalBudgetMS: 1}))
+	}, withRetry(retry.Config{MaxAttempts: 1, TotalBudgetMS: 1}))
 	h.proxy.SetScheduler(NewCellScheduler(8))
 
 	rec := h.do(t, http.MethodPost, "/v1/messages",
