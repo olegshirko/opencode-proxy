@@ -16,9 +16,9 @@ import (
 // `event: ping` on an interval, so a client waiting through retries sees a
 // live stream instead of silence.
 type pingWriter struct {
-	inner    http.ResponseWriter
-	flusher  http.Flusher
-	interval time.Duration
+	inner      http.ResponseWriter
+	flusher    http.Flusher
+	interval   time.Duration
 	keepalives *atomic.Int64
 
 	mu        sync.Mutex
@@ -212,7 +212,7 @@ func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Con
 			return resp.StatusCode, attempt, acc, aborted
 		}
 
-		retryable := ShouldRetry(resp.StatusCode)
+		retryable := ShouldRetryResponse(resp)
 		if retryable {
 			p.sched.ReportFailure(cell)
 		}

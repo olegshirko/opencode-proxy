@@ -309,6 +309,52 @@ func TestDoesNotRetry404(t *testing.T) {
 	}
 }
 
+// When the upstream says x-should-retry: false, the proxy must believe it and
+// hand the response through on the first attempt, even for a 429.
+func TestUpstreamShouldRetryFalseStopsRetries(t *testing.T) {
+	var calls atomic.Int64
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("X-Should-Retry", "false")
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("busy"))
+	}, withRetry(RetryConfig{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
+
+	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
+	if res.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", res.Code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("upstream calls = %d, want 1 (upstream said not to retry)", got)
+	}
+	if stats := h.proxy.Stats(); stats.Retries != 0 {
+		t.Fatalf("retries = %d, want 0", stats.Retries)
+	}
+}
+
+// The reverse: an explicit x-should-retry: true makes the proxy retry a status
+// its own heuristic would give up on.
+func TestUpstreamShouldRetryTrueForcesRetries(t *testing.T) {
+	var calls atomic.Int64
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("X-Should-Retry", "true")
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}, withRetry(RetryConfig{MaxAttempts: 3, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}))
+
+	res := h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 after the forced retry", res.Code)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("upstream calls = %d, want 2", got)
+	}
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	future := time.Now().Add(3 * time.Second).UTC()
 	past := time.Now().Add(-time.Minute).UTC()

@@ -110,15 +110,15 @@ func TestSummariesStrippedFromHistory(t *testing.T) {
 
 func TestCleanMarkdownLine(t *testing.T) {
 	cases := map[string]string{
-		"## Heading":        "Heading",
-		"- bullet point":    "bullet point",
-		"1. numbered":       "numbered",
-		"`code` note":       "code note",
-		"[link](http://x)":  "link",
-		"  spaced  ":        "spaced",
-		"":                  "",
-		"###":               "",
-		"plain text":        "plain text",
+		"## Heading":         "Heading",
+		"- bullet point":     "bullet point",
+		"1. numbered":        "numbered",
+		"`code` note":        "code note",
+		"[link](http://x)":   "link",
+		"  spaced  ":         "spaced",
+		"":                   "",
+		"###":                "",
+		"plain text":         "plain text",
 		"see [docs](/d) now": "see docs now",
 	}
 	for in, want := range cases {

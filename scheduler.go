@@ -79,6 +79,15 @@ func (s *CellScheduler) ReportFailure(key string) {
 	}
 }
 
+// ResetCell drops a cell's failure history and rotation. Compaction rewrites
+// the prompt prefix, so a rotated key's cached prefill is stale; the chain
+// starts over from the base key with a fresh cache.
+func (s *CellScheduler) ResetCell(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.health, key)
+}
+
 // ReportSuccess clears a cell's failure history and, after a quiet spell,
 // gives the ceiling one slot back.
 func (s *CellScheduler) ReportSuccess(key string) {

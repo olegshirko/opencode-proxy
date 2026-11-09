@@ -21,7 +21,7 @@ func TestCellKeyVariants(t *testing.T) {
 		{"auxiliary", map[string]string{"X-Claude-Code-Request-Class": "auxiliary"}, "s:sess:aux", PriorityAuxiliary},
 		{"compaction", map[string]string{"X-Claude-Code-Compaction": "1", "X-Claude-Code-Agent-Id": "a1"}, "s:sess", PriorityMain},
 		{"agent wins over class", map[string]string{
-			"X-Claude-Code-Agent-Id":       "a1",
+			"X-Claude-Code-Agent-Id":      "a1",
 			"X-Claude-Code-Request-Class": "auxiliary",
 		}, "s:sess:aux", PriorityAuxiliary},
 	}

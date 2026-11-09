@@ -178,6 +178,25 @@ func TestReportSuccessClearsRotationState(t *testing.T) {
 	}
 }
 
+// Compaction rewrites the prompt prefix, so a rotated key's cached prefill is
+// stale either way. ResetCell must drop the rotation, letting the chain start
+// from the base key with a fresh cache.
+func TestResetCellDropsRotation(t *testing.T) {
+	s := NewCellScheduler(4)
+	key := "s:1:a:z"
+	s.ReportFailure(key)
+	time.Sleep(20 * time.Millisecond)
+	if got := s.EffectiveKey(key, PrioritySubagent, false, 10*time.Millisecond); got == key {
+		t.Fatal("expected a rotated key before the reset")
+	}
+
+	s.ResetCell(key)
+
+	if got := s.EffectiveKey(key, PrioritySubagent, false, 10*time.Millisecond); got != key {
+		t.Fatalf("key still rotated after reset: %q", got)
+	}
+}
+
 func TestCeilingDropsOnPrefillRefusalAndRecovers(t *testing.T) {
 	s := NewCellScheduler(8)
 	clock := time.Now()

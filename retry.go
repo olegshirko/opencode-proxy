@@ -3,8 +3,10 @@ package main
 import (
 	"math"
 	"math/rand"
+	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,6 +43,21 @@ func NewRetryPolicy(cfg RetryConfig, rnd *rand.Rand) RetryPolicy {
 // 5xx are, every other status (including all remaining 4xx) is not.
 func ShouldRetry(status int) bool {
 	return status == 429 || (status >= 500 && status <= 599)
+}
+
+// ShouldRetryResponse decides from a response. An explicit x-should-retry
+// header is the upstream's own verdict and outranks the status heuristic:
+// "false" hands the response through untouched, "true" retries even a status
+// the heuristic would give up on. An absent or unparseable value falls back
+// to ShouldRetry.
+func ShouldRetryResponse(resp *http.Response) bool {
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("X-Should-Retry"))) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return ShouldRetry(resp.StatusCode)
 }
 
 // WaitFor returns how long to wait before the given attempt. attempt is

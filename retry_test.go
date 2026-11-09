@@ -2,6 +2,7 @@ package main
 
 import (
 	"math/rand"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -33,6 +34,38 @@ func TestShouldRetry(t *testing.T) {
 	for _, c := range cases {
 		if got := ShouldRetry(c.status); got != c.want {
 			t.Errorf("ShouldRetry(%d) = %v, want %v", c.status, got, c.want)
+		}
+	}
+}
+
+// x-should-retry is the upstream's own verdict and outranks the status-code
+// heuristic; an absent or unparseable header falls back to the heuristic.
+func TestShouldRetryResponseHonoursUpstreamHeader(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		header string
+		want   bool
+	}{
+		{"429 without header", 429, "", true},
+		{"429 denied by upstream", 429, "false", false},
+		{"500 denied by upstream", 500, "false", false},
+		{"500 without header", 500, "", true},
+		{"404 without header", 404, "", false},
+		{"404 forced by upstream", 404, "true", true},
+		{"400 forced by upstream", 400, "true", true},
+		{"header is case-insensitive", 400, "TRUE", true},
+		{"garbage falls back", 404, "maybe", false},
+		{"garbage falls back retryable", 502, "maybe", true},
+	}
+	for _, c := range cases {
+		h := http.Header{}
+		if c.header != "" {
+			h.Set("X-Should-Retry", c.header)
+		}
+		resp := &http.Response{StatusCode: c.status, Header: h}
+		if got := ShouldRetryResponse(resp); got != c.want {
+			t.Errorf("%s: ShouldRetryResponse(%d, %q) = %v, want %v", c.name, c.status, c.header, got, c.want)
 		}
 	}
 }

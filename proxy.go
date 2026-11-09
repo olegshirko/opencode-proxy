@@ -240,6 +240,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		session = cfg.SessionFallback
 	}
 	cell, agent, class, prio := cellKey(r, session)
+	// A compaction rewrites the prompt prefix: any rotated key cached for this
+	// session points at a stale prefill, so the chain starts from the base key.
+	if r.Header.Get("X-Claude-Code-Compaction") != "" {
+		p.sched.ResetCell(cell)
+	}
 	cell = p.sched.EffectiveKey(cell, prio, cfg.Scheduler.FallbackRotateMain,
 		time.Duration(cfg.Scheduler.FallbackAfterMS)*time.Millisecond)
 	var waited time.Duration
@@ -551,10 +556,10 @@ func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*htt
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			p.sched.ReportSuccess(cell)
-		} else if ShouldRetry(resp.StatusCode) {
+		} else if ShouldRetryResponse(resp) {
 			p.sched.ReportFailure(cell)
 		}
-		if !ShouldRetry(resp.StatusCode) || attempt >= maxAttempts {
+		if !ShouldRetryResponse(resp) || attempt >= maxAttempts {
 			return resp, attempt, nil
 		}
 
