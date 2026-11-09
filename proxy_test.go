@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/reqlog"
@@ -44,8 +45,8 @@ func testRegistry(t *testing.T) *models.Registry {
 	return reg
 }
 
-func testConfig(upstream string, mutate ...func(*Config)) *ConfigLoader {
-	cfg := Defaults()
+func testConfig(upstream string, mutate ...func(*config.Config)) *config.ConfigLoader {
+	cfg := config.Defaults()
 	cfg.Upstream = upstream
 	cfg.Log.File = ""
 	cfg.Log.MaxBodyBytes = 1 << 20
@@ -59,11 +60,11 @@ func testConfig(upstream string, mutate ...func(*Config)) *ConfigLoader {
 	for _, fn := range mutate {
 		fn(&cfg)
 	}
-	return &ConfigLoader{cfg: cfg}
+	return config.With(cfg)
 }
 
-func withRetry(rc retry.Config) func(*Config) {
-	return func(c *Config) { c.Retry = rc }
+func withRetry(rc retry.Config) func(*config.Config) {
+	return func(c *config.Config) { c.Retry = rc }
 }
 
 type harness struct {
@@ -73,7 +74,7 @@ type harness struct {
 	records  chan reqlog.RequestRecord
 }
 
-func newHarness(t *testing.T, handler http.HandlerFunc, mutate ...func(*Config)) *harness {
+func newHarness(t *testing.T, handler http.HandlerFunc, mutate ...func(*config.Config)) *harness {
 	t.Helper()
 	up := httptest.NewServer(handler)
 	t.Cleanup(up.Close)
@@ -207,7 +208,7 @@ func TestSessionFallbackWhenHeaderMissing(t *testing.T) {
 	got := make(chan string, 1)
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		got <- r.Header.Get("x-opencode-session")
-	}, func(c *Config) { c.SessionFallback = "fallback-1" })
+	}, func(c *config.Config) { c.SessionFallback = "fallback-1" })
 
 	h.do(t, http.MethodPost, "/v1/messages", `{"model":"glm-5.3","messages":[]}`, nil)
 	if s := <-got; s != "s:fallback-1" {
@@ -549,7 +550,7 @@ func TestCountTokensDoesNotWaitForACell(t *testing.T) {
 		<-release
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
-	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 2000 })
+	}, func(c *config.Config) { c.Scheduler.QueueTimeoutMS = 2000 })
 	h.proxy.SetScheduler(scheduler.NewCellScheduler(1))
 
 	mainDone := make(chan struct{})
@@ -819,7 +820,7 @@ func TestCaptureMasksHeadersAndTruncates(t *testing.T) {
 		w.Header().Set("x-api-key", "upstream-secret")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(upstreamBody))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Log.MaxBodyBytes = 10
 		c.Log.Capture = reqlog.Capture{
 			RequestHeaders: true, RequestBody: true,
@@ -975,7 +976,7 @@ func TestQueueTimeoutAnswersOverloaded(t *testing.T) {
 		<-release
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
-	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 50 })
+	}, func(c *config.Config) { c.Scheduler.QueueTimeoutMS = 50 })
 	h.proxy.SetScheduler(scheduler.NewCellScheduler(1))
 
 	done := make(chan struct{})
@@ -1048,7 +1049,7 @@ func TestPingWriterDelegatesTheResponseWriter(t *testing.T) {
 }
 
 func TestFillCapturedBodyRecordsTruncation(t *testing.T) {
-	cfg := Defaults()
+	cfg := config.Defaults()
 	cfg.Log.Capture.ResponseBody = true
 	cfg.Log.MaxBodyBytes = 4
 
@@ -1063,7 +1064,7 @@ func TestFillCapturedBodyRecordsTruncation(t *testing.T) {
 
 	// A nil record and a disabled capture are both no-ops.
 	fillCapturedBody(nil, &cfg, []byte("abc"))
-	off := Defaults()
+	off := config.Defaults()
 	off.Log.Capture.ResponseBody = false
 	rec2 := &reqlog.CaptureRecord{}
 	fillCapturedBody(rec2, &off, []byte("abc"))
@@ -1081,7 +1082,7 @@ func TestTruncateBodyWithoutALimit(t *testing.T) {
 
 func TestLoaderDefaultsMatchesTheBuiltIns(t *testing.T) {
 	l := testConfig("http://127.0.0.1:1")
-	if got := l.Defaults().Listen; got != Defaults().Listen {
+	if got := l.Defaults().Listen; got != config.Defaults().Listen {
 		t.Fatalf("loader Defaults listen = %q", got)
 	}
 }

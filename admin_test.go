@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
@@ -18,12 +19,12 @@ import (
 
 // newAdminHarness builds a Proxy whose ConfigLoader is backed by a real file,
 // so tests can verify that admin writes reach the disk.
-func newAdminHarness(t *testing.T, mutate ...func(*Config)) *Proxy {
+func newAdminHarness(t *testing.T, mutate ...func(*config.Config)) *Proxy {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	base := Defaults()
+	base := config.Defaults()
 	base.Upstream = "http://127.0.0.1:1"
 	base.Log.File = ""
 	base.Retry = retry.Config{MaxAttempts: 2, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 5, TotalBudgetMS: 50}
@@ -42,7 +43,7 @@ func newAdminHarness(t *testing.T, mutate ...func(*Config)) *Proxy {
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loader, err := NewConfigLoader(cfgPath)
+	loader, err := config.NewConfigLoader(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +78,7 @@ func TestAdminStatusReportsCounters(t *testing.T) {
 	}))
 	defer up.Close()
 
-	p := newAdminHarness(t, func(c *Config) { c.Upstream = up.URL })
+	p := newAdminHarness(t, func(c *config.Config) { c.Upstream = up.URL })
 	for i := 0; i < 2; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(`{"model":"claude-GLM-5.3"}`))
 		p.ServeHTTP(httptest.NewRecorder(), req)
@@ -112,11 +113,11 @@ func TestAdminPutCaptureTogglesAndPersists(t *testing.T) {
 		t.Errorf("capture = %+v, unset flags flipped on", got)
 	}
 
-	onDisk, err := os.ReadFile(p.cfg.path)
+	onDisk, err := os.ReadFile(p.cfg.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var saved Config
+	var saved config.Config
 	if err := json.Unmarshal(onDisk, &saved); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 }
 
 func TestAdminDisabledReturns404(t *testing.T) {
-	p := newAdminHarness(t, func(c *Config) { c.Admin.Enabled = false })
+	p := newAdminHarness(t, func(c *config.Config) { c.Admin.Enabled = false })
 
 	rec := adminDo(t, p, http.MethodGet, "/admin/status", "", nil)
 	if rec.Code != http.StatusNotFound {

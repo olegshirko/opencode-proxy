@@ -6,6 +6,7 @@ import (
 	"opencode-proxy/internal/reqlog"
 	"strings"
 
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/picker"
@@ -209,7 +210,7 @@ func (p *Proxy) adminPatchConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	err := p.cfg.Update(func(c *Config) error {
+	err := p.cfg.Update(func(c *config.Config) error {
 		if patch.Log != nil {
 			if patch.Log.Capture != nil {
 				applyCapturePatch(&c.Log.Capture, *patch.Log.Capture)
@@ -274,7 +275,7 @@ func (p *Proxy) adminPutCapture(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	err := p.cfg.Update(func(c *Config) error {
+	err := p.cfg.Update(func(c *config.Config) error {
 		applyCapturePatch(&c.Log.Capture, patch)
 		return nil
 	})
@@ -320,7 +321,7 @@ func (p *Proxy) adminPutAliases(w http.ResponseWriter, r *http.Request) {
 	if aliases == nil {
 		aliases = map[string]string{}
 	}
-	if err := p.cfg.Update(func(c *Config) error {
+	if err := p.cfg.Update(func(c *config.Config) error {
 		c.Models.Aliases = copyAliases(aliases)
 		return nil
 	}); err != nil {
@@ -373,7 +374,7 @@ func formatOptionalTime(t time.Time) string {
 
 // redactedConfig returns a copy safe to send over HTTP: the admin token is
 // replaced rather than omitted, so the caller can see that one is set.
-func redactedConfig(c *Config) *Config {
+func redactedConfig(c *config.Config) *config.Config {
 	out := *c
 	out.Models.Aliases = copyAliases(c.Models.Aliases)
 	if out.Admin.Token != "" {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/picker"
 )
 
@@ -87,7 +88,7 @@ func (c *liveCatalog) Lookup(name string) (string, bool) {
 
 // catalogURL is the gateway's model list. It is read from the config when set,
 // otherwise derived from the inference endpoint the proxy already knows.
-func catalogURL(cfg *Config) string {
+func catalogURL(cfg *config.Config) string {
 	if cfg.Models.CatalogURL != "" {
 		return cfg.Models.CatalogURL
 	}

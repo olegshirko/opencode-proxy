@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/quota"
@@ -50,7 +51,7 @@ type Stats struct {
 // Proxy is the HTTP handler that forwards Anthropic API calls to the OpenCode
 // gateway.
 type Proxy struct {
-	cfg    *ConfigLoader
+	cfg    *config.ConfigLoader
 	reg    *models.Registry
 	log    *reqlog.Logger
 	client *http.Client
@@ -80,7 +81,7 @@ type Proxy struct {
 	onRecord func(reqlog.RequestRecord)
 }
 
-func NewProxy(cfg *ConfigLoader, reg *models.Registry, log *reqlog.Logger, client *http.Client) *Proxy {
+func NewProxy(cfg *config.ConfigLoader, reg *models.Registry, log *reqlog.Logger, client *http.Client) *Proxy {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -153,7 +154,7 @@ func (p *Proxy) addSessionCost(session, model string, allowance, listCost float6
 
 // applyQuota writes the unified rate-limit headers Claude Code reads to show
 // remaining allowance. It runs only when a monthly budget is configured.
-func (p *Proxy) applyQuota(h http.Header, cfg *Config) {
+func (p *Proxy) applyQuota(h http.Header, cfg *config.Config) {
 	if p.usage == nil || cfg.Limits.MonthlyUSD <= 0 {
 		return
 	}
@@ -440,7 +441,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string, route *models.Route) (*http.Request, error) {
+func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *config.Config, body []byte, session string, route *models.Route) (*http.Request, error) {
 	upstream := cfg.Upstream
 	if route != nil && route.BaseURL != "" {
 		upstream = route.BaseURL
@@ -514,7 +515,7 @@ func copyHeaders(dst, src http.Header) {
 // attempt count or the total wait budget is exhausted. It returns the final
 // response (whose headers have not been written to the client yet) and the
 // number of attempts made.
-func (p *Proxy) doAttempts(ctx context.Context, cfg *Config, newReq func() (*http.Request, error), cell string) (*http.Response, int, error) {
+func (p *Proxy) doAttempts(ctx context.Context, cfg *config.Config, newReq func() (*http.Request, error), cell string) (*http.Response, int, error) {
 	policy := retry.NewRetryPolicy(cfg.Retry, nil)
 	maxAttempts := cfg.Retry.MaxAttempts
 	if maxAttempts < 1 {
@@ -626,7 +627,7 @@ func parseRetryAfter(v string) time.Duration {
 // relayResponse streams the upstream body to the client, flushing every
 // chunk, while parsing usage for the request log and capturing the body when
 // requested. It reports whether the client went away.
-func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *reqlog.CaptureRecord, cfg *Config, modelIn string) (usageAccumulator, bool) {
+func relayResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, rec *reqlog.CaptureRecord, cfg *config.Config, modelIn string) (usageAccumulator, bool) {
 	var (
 		parser   *sseParser
 		raw      bytes.Buffer
@@ -1052,7 +1053,7 @@ func parseUsageJSON(body []byte) usageAccumulator {
 	return acc
 }
 
-func newCaptureRecord(cfg *Config, header http.Header, body []byte) *reqlog.CaptureRecord {
+func newCaptureRecord(cfg *config.Config, header http.Header, body []byte) *reqlog.CaptureRecord {
 	cc := cfg.Log.Capture
 	if !cc.RequestHeaders && !cc.RequestBody && !cc.ResponseHeaders && !cc.ResponseBody {
 		return nil
@@ -1067,7 +1068,7 @@ func newCaptureRecord(cfg *Config, header http.Header, body []byte) *reqlog.Capt
 	return rec
 }
 
-func fillCapturedBody(rec *reqlog.CaptureRecord, cfg *Config, body []byte) {
+func fillCapturedBody(rec *reqlog.CaptureRecord, cfg *config.Config, body []byte) {
 	if rec == nil || !cfg.Log.Capture.ResponseBody {
 		return
 	}
@@ -1190,7 +1191,7 @@ func tokenCacheKey(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (p *Proxy) countTokens(ctx context.Context, cfg *Config, base *http.Request, body []byte, cell string) (*cachedResponse, error) {
+func (p *Proxy) countTokens(ctx context.Context, cfg *config.Config, base *http.Request, body []byte, cell string) (*cachedResponse, error) {
 	return p.tokens.getOrLoad(ctx, tokenCacheKey(body), func() (*cachedResponse, error) {
 		resp, attempts, err := p.doAttempts(ctx, cfg, func() (*http.Request, error) {
 			return cloneRequestBody(ctx, base, body), nil

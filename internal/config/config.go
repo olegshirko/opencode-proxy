@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -121,6 +121,15 @@ type ConfigLoader struct {
 	mtime time.Time
 }
 
+// Path returns the file the loader reads and writes back to.
+func (l *ConfigLoader) Path() string { return l.path }
+
+// With wraps a Config in an in-memory loader. Tests use it to hand the
+// handler a fully built configuration without a file.
+func With(cfg Config) *ConfigLoader {
+	return &ConfigLoader{cfg: cfg}
+}
+
 // NewConfigLoader reads path into a Config filled with Defaults, then keeps
 // the result for concurrent readers.
 func NewConfigLoader(path string) (*ConfigLoader, error) {
@@ -132,7 +141,7 @@ func NewConfigLoader(path string) (*ConfigLoader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
-	cfg, err := parseConfig(data)
+	cfg, err := Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
@@ -171,7 +180,7 @@ func (l *ConfigLoader) ReloadIfChanged() error {
 	if err != nil {
 		return fmt.Errorf("config: read %s: %w", l.path, err)
 	}
-	cfg, err := parseConfig(data)
+	cfg, err := Parse(data)
 	if err != nil {
 		return fmt.Errorf("config: parse %s: %w", l.path, err)
 	}
@@ -215,7 +224,7 @@ func (l *ConfigLoader) Update(fn func(*Config) error) error {
 // parseConfig decodes data over the defaults. A file-provided aliases table
 // replaces the default one instead of merging into it; an omitted table
 // keeps the defaults.
-func parseConfig(data []byte) (Config, error) {
+func Parse(data []byte) (Config, error) {
 	cfg := Defaults()
 	defaultAliases := cfg.Models.Aliases
 	cfg.Models.Aliases = nil

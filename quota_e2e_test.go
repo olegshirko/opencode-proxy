@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/quota"
 )
 
@@ -16,7 +17,7 @@ func TestProxyEmitsQuotaHeadersOnSuccess(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.Write([]byte(`{"type":"message","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Limits = quota.Limits{MonthlyUSD: 100, WarningFraction: 0.85}
 	})
 	ledger, _ := quota.NewUsageLedger("")
@@ -60,7 +61,7 @@ func TestAuxiliaryRoutedToBackgroundModel(t *testing.T) {
 			seenModel, _ = data["model"].(string)
 		}
 		w.Write([]byte(`{"type":"message"}`))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Models.Background = "deepseek-v4.1-flash"
 	})
 
@@ -86,7 +87,7 @@ func TestCompactionStaysOnRequestedModel(t *testing.T) {
 			seenModel, _ = data["model"].(string)
 		}
 		w.Write([]byte(`{"type":"message"}`))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Models.Background = "deepseek-v4.1-flash"
 	})
 
@@ -104,7 +105,7 @@ func TestProxyEmitsQuotaHeadersOnStream(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "data: {\"type\":\"message_start\"}\n\n")
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Limits = quota.Limits{MonthlyUSD: 100}
 	})
 	ledger, _ := quota.NewUsageLedger("")

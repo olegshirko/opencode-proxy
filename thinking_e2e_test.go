@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/thinking"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func TestStreamThinkingFallbackAfterWait(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(sse))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Scheduler.ThinkingSummaryWaitMS = 10
 	})
 
@@ -118,7 +119,7 @@ func TestHoldReleasesBeforeUnrelatedEvent(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(sse))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Scheduler.ThinkingSummaryWaitMS = 500
 	})
 
@@ -152,7 +153,7 @@ func TestStreamThinkingSummarySurvivesEventLines(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(sse))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Scheduler.ThinkingSummaryWaitMS = 300
 	})
 
@@ -174,7 +175,7 @@ func TestStreamThinkingSummaryWaitDisabled(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(sse))
-	}, func(c *Config) {
+	}, func(c *config.Config) {
 		c.Scheduler.ThinkingSummaryWaitMS = 0
 	})
 

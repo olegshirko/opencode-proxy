@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/reqlog"
 	"sync/atomic"
 	"testing"
@@ -46,7 +47,7 @@ func modelsOf(t *testing.T, rec *httptest.ResponseRecorder) []string {
 }
 
 func TestCatalogURLDerivesFromUpstream(t *testing.T) {
-	cfg := Defaults()
+	cfg := config.Defaults()
 	if got := catalogURL(&cfg); got != "https://opencode.ai/inference/go/v1/models" {
 		t.Fatalf("derived catalog URL = %q", got)
 	}
@@ -62,7 +63,7 @@ func TestModelsEndpointUsesTheLiveCatalog(t *testing.T) {
 		{"id":"brand-new","name":"Brand New"},
 		{"id":"retired","name":"Retired"}]}`)
 
-	cfg := testConfig("http://127.0.0.1:1", func(c *Config) {
+	cfg := testConfig("http://127.0.0.1:1", func(c *config.Config) {
 		c.Models.CatalogURL = srv.URL + "/catalog"
 	})
 	reg := mustRegistry(t, `{"models":[
@@ -94,7 +95,7 @@ func TestModelsEndpointUsesTheLiveCatalog(t *testing.T) {
 }
 
 func TestModelsEndpointFallsBackToTheSnapshot(t *testing.T) {
-	cfg := testConfig("http://127.0.0.1:1", func(c *Config) {
+	cfg := testConfig("http://127.0.0.1:1", func(c *config.Config) {
 		c.Models.CatalogURL = "http://127.0.0.1:1/unreachable"
 	})
 	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
@@ -134,7 +135,7 @@ func TestRequestForANewCatalogModelResolves(t *testing.T) {
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
-	}, func(c *Config) { c.Models.CatalogURL = srv.URL + "/catalog" })
+	}, func(c *config.Config) { c.Models.CatalogURL = srv.URL + "/catalog" })
 
 	// Warm the catalog the way the app does, through the model list.
 	rec := httptest.NewRecorder()

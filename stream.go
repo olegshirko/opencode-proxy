@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"sync"
@@ -125,7 +126,7 @@ func (pw *pingWriter) StopPings() {
 // stays silent past keepalive_after_ms, or answers with a retryable status,
 // the client is switched to a committed SSE stream and receives pings until
 // the real response (or a terminal error event) arrives.
-func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *Config, base *http.Request, body []byte, modelIn string, capture *reqlog.CaptureRecord, cell string) (int, int, usageAccumulator, bool) {
+func (p *Proxy) serveStream(ctx context.Context, w http.ResponseWriter, cfg *config.Config, base *http.Request, body []byte, modelIn string, capture *reqlog.CaptureRecord, cell string) (int, int, usageAccumulator, bool) {
 	kaAfter := time.Duration(cfg.Scheduler.KeepaliveAfterMS) * time.Millisecond
 	kaInterval := time.Duration(cfg.Scheduler.KeepaliveIntervalMS) * time.Millisecond
 	if kaInterval <= 0 {

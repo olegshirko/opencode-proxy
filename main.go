@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/quota"
@@ -76,7 +77,7 @@ func main() {
 	addr := flag.String("addr", "", "listen address (overrides the config value)")
 	flag.Parse()
 
-	loader, err := NewConfigLoader(*configPath)
+	loader, err := config.NewConfigLoader(*configPath)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
