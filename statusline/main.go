@@ -51,6 +51,20 @@ type sessionCost struct {
 	} `json:"by_model"`
 }
 
+// resolveSessionID maps the statusline input id to the id the proxy knows.
+// The desktop app sends local_… ids that need the macOS session-directory
+// lookup; the Claude Code CLI sends its own conversation id directly, which
+// is exactly the X-Claude-Code-Session-Id the proxy logs.
+func resolveSessionID(id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("unexpected session id")
+	}
+	if strings.HasPrefix(id, "local_") {
+		return cliSessionID(id)
+	}
+	return id, nil
+}
+
 // cliSessionID находит CLI-сессию (её же видит прокси как X-Claude-Code-Session-Id)
 // по локальному id сессии приложения.
 func cliSessionID(localID string) (string, error) {
@@ -152,7 +166,7 @@ func main() {
 		parts := make([]string, 0, 6)
 		sessionCost := 0.0
 		sessionReqs := 0
-		if cliID, err := cliSessionID(in.SessionID); err == nil {
+		if cliID, err := resolveSessionID(in.SessionID); err == nil {
 			if sc, err := fetchCost(cliID); err == nil {
 				sessionCost, sessionReqs = sc.USD, sc.Requests
 			}
