@@ -88,12 +88,17 @@ For a headless machine: `loginctl enable-linger`.
 `~/.claude/settings.json` (merge it with what is already there):
 
 ```bash
-go run ./cmd/genmodels -settings     # prints ANTHROPIC_BASE_URL + modelPicker
+make settings                        # prints ANTHROPIC_BASE_URL + modelPicker
 ```
 
 Replace the token placeholder with your OpenCode Go token, restart Claude Code, and
 `/model` lists the catalog. Models your region cannot serve are excluded; re-probe for
-your region any time with `make models` (needs your token in `~/.claude/settings.json`).
+your region any time — then regenerate the block from the same file:
+
+```bash
+make models                          # probes availability for your region
+make settings                        # picker now matches your region
+```
 
 **Status line and search** work as on macOS:
 

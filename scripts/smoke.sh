@@ -13,6 +13,8 @@ PORT=${3:-4010}
 "$BIN" -config "$CONFIG" -addr "127.0.0.1:$PORT" >/tmp/opencode-proxy-smoke.log 2>&1 &
 pid=$!
 trap 'kill "$pid" 2>/dev/null || true' EXIT INT TERM
+# A previous run's verdict must never answer for this candidate.
+rm -f /tmp/opencode-proxy-smoke.json
 
 i=0
 while [ "$i" -lt 60 ]; do

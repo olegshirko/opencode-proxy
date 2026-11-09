@@ -78,8 +78,12 @@ uninstall: uninstall-linux
 endif
 
 # Linux: systemd user unit, no root. The config file self-creates from
-# defaults on first start; models.json ships from the repo.
-install-linux: test smoke
+# defaults on first start; models.json ships from the repo. The smoke run
+# goes against the live config path: the repo's tracked config.json carries
+# macOS-absolute state paths that cannot exist on Linux.
+install-linux: test
+	@$(MAKE) build
+	@sh ./scripts/smoke.sh $(NEW) $(LIVE_CONFIG)
 	@mv $(NEW) $(BIN)
 	@mkdir -p $(HOME)/.local/bin $(CONFIG_DIR) $(STATE_DIR)
 	@install -m 0755 $(BIN) $(HOME)/.local/bin/opencode-proxy
@@ -108,6 +112,12 @@ verify:
 # probes availability. The proxy re-reads the file by mtime.
 models: genmodels
 	go run ./cmd/genmodels -out $(CONFIG_DIR)/models.json -probe -token-file $(HOME)/.claude/settings.json
+
+# Prints the Claude Code settings block (modelPicker) from the models.json
+# the proxy actually serves. Run after `make models` so availability is
+# yours, not the author's region's.
+settings: genmodels
+	go run ./cmd/genmodels -out $(CONFIG_DIR)/models.json -settings
 
 # Installs the daily models.json refresh (macOS launchd timer for now; Linux
 # gets a systemd timer as a follow-up). Every night the timer regenerates the
