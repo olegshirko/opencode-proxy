@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"encoding/json"
@@ -74,7 +74,7 @@ func TestForwardsEveryAnthropicHeader(t *testing.T) {
 func TestModelsEndpointListsPickers(t *testing.T) {
 	cfg := testConfig("http://127.0.0.1:1")
 	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
-	router := buildRouter(p)
+	router := Router(p)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))

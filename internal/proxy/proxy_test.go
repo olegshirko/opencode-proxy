@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"bufio"
@@ -1100,3 +1100,7 @@ func mustRegistry(t *testing.T, data string) *models.Registry {
 	}
 	return reg
 }
+
+type discard struct{}
+
+func (*discard) Write(p []byte) (int, error) { return len(p), nil }

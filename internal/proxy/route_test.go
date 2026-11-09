@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"encoding/json"
@@ -94,7 +94,7 @@ func TestRoutedModelIsListed(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	buildRouter(h.proxy).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	Router(h.proxy).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}

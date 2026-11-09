@@ -10,6 +10,7 @@ import (
 	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
+	"opencode-proxy/internal/proxy"
 	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/scheduler"
@@ -53,25 +54,6 @@ func CleanupStaleTempFiles(dir string, maxAge time.Duration) {
 	}
 }
 
-// buildRouter wires the admin control plane beside the proxy. Anything under
-// /admin/ stays local; everything else is forwarded upstream.
-func buildRouter(proxy *Proxy) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("/admin/", proxy.AdminHandler())
-	// Model discovery endpoint: the app may read it instead of a hand-written
-	// list. It is answered locally and never forwarded.
-	mux.HandleFunc("GET /v1/models", proxy.ModelsHandler)
-	// Web search for the desktop app's built-in search connector. It runs
-	// through OpenCode's providers and never touches the upstream model.
-	mux.HandleFunc("POST /search", SearchHandler)
-	// The desktop app probes this before it will use the endpoint.
-	mux.HandleFunc("HEAD /api/hello", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.Handle("/", proxy)
-	return mux
-}
-
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to config.json")
 	addr := flag.String("addr", "", "listen address (overrides the config value)")
@@ -100,7 +82,7 @@ func main() {
 
 	cfg := loader.Get()
 	dialer := &net.Dialer{Timeout: time.Duration(cfg.ConnectTimeoutSeconds) * time.Second}
-	proxy := NewProxy(loader, registry, logger, &http.Client{
+	p := proxy.NewProxy(loader, registry, logger, &http.Client{
 		Transport: &http.Transport{
 			DialContext:         dialer.DialContext,
 			MaxIdleConnsPerHost: 16,
@@ -108,7 +90,7 @@ func main() {
 		},
 	})
 
-	mux := buildRouter(proxy)
+	mux := proxy.Router(p)
 
 	// Session cost must survive a relaunch: the desktop session outlives the
 	// proxy process, so a zeroed counter would read as a bug.
@@ -116,7 +98,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
-	proxy.SetCostStore(costs)
+	p.SetCostStore(costs)
 
 	// The quota ledger turns accumulated allowance into the 5-hour/weekly
 	// headers Claude Code shows as plan usage.
@@ -124,8 +106,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
-	proxy.SetUsageLedger(usage)
-	proxy.SetScheduler(scheduler.NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
+	p.SetUsageLedger(usage)
+	p.SetScheduler(scheduler.NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
 	flushCtx, stopFlush := context.WithCancel(context.Background())
 	defer stopFlush()
 	flusherDone := costs.StartFlusher(flushCtx, 5*time.Second)

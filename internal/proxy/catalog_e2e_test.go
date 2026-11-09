@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"encoding/json"
@@ -63,7 +63,7 @@ func TestModelsEndpointUsesTheLiveCatalog(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer tok")
-	buildRouter(p).ServeHTTP(rec, req)
+	Router(p).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
@@ -90,7 +90,7 @@ func TestModelsEndpointFallsBackToTheSnapshot(t *testing.T) {
 	p := NewProxy(cfg, testRegistry(t), reqlog.NewWithWriter(&discard{}, cfg.Get().Log), &http.Client{})
 
 	rec := httptest.NewRecorder()
-	buildRouter(p).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	Router(p).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 even when the catalog is down", rec.Code)
@@ -112,7 +112,7 @@ func TestRequestForANewCatalogModelResolves(t *testing.T) {
 
 	// Warm the catalog the way the app does, through the model list.
 	rec := httptest.NewRecorder()
-	buildRouter(h.proxy).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	Router(h.proxy).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("models status = %d", rec.Code)
 	}

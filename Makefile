@@ -10,7 +10,7 @@ UID     := $(shell id -u)
 
 # Only this module's packages: the worktree may hold other people's scratch
 # directories, and they must not be able to fail this build.
-PKGS := . ./cmd/... ./internal/... ./statusline
+PKGS := ./cmd/... ./internal/... ./statusline
 
 .PHONY: build statusline test smoke install restart uninstall verify models
 
@@ -20,7 +20,7 @@ statusline:
 
 build:
 	@mkdir -p $(CURDIR)/bin
-	go build -o $(NEW) .
+	go build -o $(NEW) ./cmd/opencode-proxy
 
 test:
 	go test -race $(PKGS)
