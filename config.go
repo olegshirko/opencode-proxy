@@ -3,10 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/reqlog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +22,7 @@ type Config struct {
 	Upstream              string          `json:"upstream"`
 	SessionFallback       string          `json:"session_fallback"`
 	Log                   reqlog.Config   `json:"log"`
-	Models                ModelsConfig    `json:"models"`
+	Models                models.Settings `json:"models"`
 	Retry                 retry.Config    `json:"retry"`
 	Admin                 AdminConfig     `json:"admin"`
 	Scheduler             SchedulerConfig `json:"scheduler"`
@@ -43,87 +43,6 @@ type SchedulerConfig struct {
 	// ThinkingSummaryWaitMS bounds how long a thinking block's start event is
 	// held back while the proxy collects a one-line summary for it.
 	ThinkingSummaryWaitMS int `json:"thinking_summary_wait_ms"`
-}
-
-// ModelRoute sends one model to a different upstream endpoint with its own
-// credentials. The gateway is not one host: the subscription answers on
-// /inference/go, while models outside the plan live on /inference with their
-// own token, and a route is what tells the proxy which is which.
-type ModelRoute struct {
-	ID        string  `json:"id"`
-	Picker    string  `json:"picker"`
-	Label     string  `json:"label"`
-	BehavesAs string  `json:"behaves_as"`
-	MaxEffort string  `json:"max_effort"`
-	Context   int     `json:"context"`
-	BaseURL   string  `json:"base_url"`
-	TokenEnv  string  `json:"token_env"`
-	TokenFile string  `json:"token_file"`
-	Pricing   Pricing `json:"pricing"`
-}
-
-// Matches reports whether the route owns this model name, which may be the
-// gateway id or the picker the desktop app shows.
-func (r *ModelRoute) Matches(name string) bool {
-	in := strings.ToLower(strings.TrimSpace(name))
-	return in != "" && (in == strings.ToLower(r.ID) || in == strings.ToLower(r.Picker))
-}
-
-// Token returns the route's credential, read from the environment first and
-// from a file second. An empty result means the route runs unauthenticated.
-func (r *ModelRoute) Token() string {
-	if r == nil {
-		return ""
-	}
-	if r.TokenEnv != "" {
-		if v := strings.TrimSpace(os.Getenv(r.TokenEnv)); v != "" {
-			return v
-		}
-	}
-	if r.TokenFile != "" {
-		path := r.TokenFile
-		if strings.HasPrefix(path, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				path = filepath.Join(home, path[2:])
-			}
-		}
-		if data, err := os.ReadFile(path); err == nil {
-			return strings.TrimSpace(string(data))
-		}
-	}
-	return ""
-}
-
-type ModelsConfig struct {
-	Default    string            `json:"default"`
-	Background string            `json:"background"`
-	Aliases    map[string]string `json:"aliases"`
-	Routes     []ModelRoute      `json:"routes"`
-	// CatalogURL is the gateway's model list that /v1/models serves. Empty
-	// means derive it from upstream, so the picker follows the subscription
-	// without a hand-maintained file.
-	CatalogURL string `json:"catalog_url"`
-}
-
-// RouteFor returns the route that owns a resolved gateway id, or nil.
-func (m ModelsConfig) RouteFor(id string) *ModelRoute {
-	for i := range m.Routes {
-		if strings.EqualFold(strings.TrimSpace(m.Routes[i].ID), id) {
-			return &m.Routes[i]
-		}
-	}
-	return nil
-}
-
-// RouteNamed returns the route owning a name the client sent, which may be
-// the picker rather than the gateway id.
-func (m ModelsConfig) RouteNamed(name string) *ModelRoute {
-	for i := range m.Routes {
-		if m.Routes[i].Matches(name) {
-			return &m.Routes[i]
-		}
-	}
-	return nil
 }
 
 type AdminConfig struct {
@@ -151,7 +70,7 @@ func Defaults() Config {
 			Capture:      reqlog.Capture{},
 			MaxBodyBytes: 65536,
 		},
-		Models: ModelsConfig{
+		Models: models.Settings{
 			Default:    "deepseek-v4.1-flash",
 			Background: "deepseek-v4.1-flash",
 			Aliases: map[string]string{

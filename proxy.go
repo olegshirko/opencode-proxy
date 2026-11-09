@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
@@ -50,7 +51,7 @@ type Stats struct {
 // gateway.
 type Proxy struct {
 	cfg    *ConfigLoader
-	reg    *Registry
+	reg    *models.Registry
 	log    *reqlog.Logger
 	client *http.Client
 
@@ -79,7 +80,7 @@ type Proxy struct {
 	onRecord func(reqlog.RequestRecord)
 }
 
-func NewProxy(cfg *ConfigLoader, reg *Registry, log *reqlog.Logger, client *http.Client) *Proxy {
+func NewProxy(cfg *ConfigLoader, reg *models.Registry, log *reqlog.Logger, client *http.Client) *Proxy {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -439,7 +440,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string, route *ModelRoute) (*http.Request, error) {
+func (p *Proxy) upstreamRequest(ctx context.Context, r *http.Request, cfg *Config, body []byte, session string, route *models.Route) (*http.Request, error) {
 	upstream := cfg.Upstream
 	if route != nil && route.BaseURL != "" {
 		upstream = route.BaseURL

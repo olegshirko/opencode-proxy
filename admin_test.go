@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"os"
@@ -26,7 +27,7 @@ func newAdminHarness(t *testing.T, mutate ...func(*Config)) *Proxy {
 	base.Upstream = "http://127.0.0.1:1"
 	base.Log.File = ""
 	base.Retry = retry.Config{MaxAttempts: 2, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 5, TotalBudgetMS: 50}
-	base.Models = ModelsConfig{
+	base.Models = models.Settings{
 		Default:    "deepseek-v4.1-flash",
 		Background: "deepseek-v4.1-flash",
 		Aliases:    map[string]string{"claude-legacy": "glm-5.3"},

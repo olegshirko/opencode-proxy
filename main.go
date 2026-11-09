@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/scheduler"
@@ -85,7 +86,7 @@ func main() {
 	CleanupStaleTempFiles(filepath.Dir(*configPath), time.Hour)
 
 	modelsPath := filepath.Join(filepath.Dir(*configPath), "models.json")
-	registry, err := LoadRegistry(modelsPath)
+	registry, err := models.LoadRegistry(modelsPath)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}

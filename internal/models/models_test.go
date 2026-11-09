@@ -1,4 +1,4 @@
-package main
+package models
 
 import (
 	"os"
@@ -24,7 +24,7 @@ func TestResolve(t *testing.T) {
         {"id":"glm-5.3","picker":"claude-GLM-5.3","available":true},
         {"id":"claude-haiku-5-5","available":true},
         {"id":"deepseek-v4.1-flash","picker":"claude-DeepSeek","available":true}]}`)
-	cfg := ModelsConfig{
+	cfg := Settings{
 		Default: "deepseek-v4.1-flash", Background: "glm-5.3-flash",
 		Aliases: map[string]string{"claude-v4.1-flash": "glm-5.3"},
 	}

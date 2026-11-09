@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/picker"
 
 	"time"
@@ -285,7 +286,7 @@ func (p *Proxy) adminPutCapture(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminModel struct {
-	Model
+	models.Model
 	ResolvesTo string `json:"resolves_to"`
 	Reason     string `json:"reason"`
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"opencode-proxy/internal/coststore"
+	"opencode-proxy/internal/models"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
 	"opencode-proxy/internal/scheduler"
@@ -26,7 +27,7 @@ import (
 
 // ---------- harness ----------
 
-func testRegistry(t *testing.T) *Registry {
+func testRegistry(t *testing.T) *models.Registry {
 	t.Helper()
 	data := `{"models":[
 		{"id":"deepseek-v4.1-flash","picker":"claude-DeepSeek-v4.1-Flash","available":true},
@@ -36,7 +37,7 @@ func testRegistry(t *testing.T) *Registry {
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	reg, err := LoadRegistry(path)
+	reg, err := models.LoadRegistry(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func testConfig(upstream string, mutate ...func(*Config)) *ConfigLoader {
 	cfg.Log.MaxBodyBytes = 1 << 20
 	cfg.SessionFallback = "fallback-session"
 	cfg.Retry = retry.Config{MaxAttempts: 5, FirstWaitMS: 1, Multiplier: 2, MaxWaitMS: 50, TotalBudgetMS: 5000}
-	cfg.Models = ModelsConfig{
+	cfg.Models = models.Settings{
 		Default:    "deepseek-v4.1-flash",
 		Background: "deepseek-v4.1-flash",
 		Aliases:    map[string]string{},
@@ -1083,4 +1084,18 @@ func TestLoaderDefaultsMatchesTheBuiltIns(t *testing.T) {
 	if got := l.Defaults().Listen; got != Defaults().Listen {
 		t.Fatalf("loader Defaults listen = %q", got)
 	}
+}
+
+// mustRegistry parses a registry fixture inline.
+func mustRegistry(t *testing.T, data string) *models.Registry {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	reg, err := models.LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	return reg
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"opencode-proxy/internal/models"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func routedHarness(t *testing.T, zen http.HandlerFunc) (*harness, *httptest.Serv
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
 	}, func(c *Config) {
-		c.Models.Routes = []ModelRoute{{
+		c.Models.Routes = []models.Route{{
 			ID:        "big-pickle",
 			Picker:    "claude-Big-Pickle",
 			Label:     "Big Pickle",
