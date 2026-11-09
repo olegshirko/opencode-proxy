@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"opencode-proxy/internal/scheduler"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -119,7 +120,7 @@ func main() {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
 	proxy.SetUsageLedger(usage)
-	proxy.SetScheduler(NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
+	proxy.SetScheduler(scheduler.NewCellScheduler(cfg.Scheduler.MaxConcurrentCells))
 	flushCtx, stopFlush := context.WithCancel(context.Background())
 	defer stopFlush()
 	flusherDone := costs.StartFlusher(flushCtx, 5*time.Second)

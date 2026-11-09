@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"opencode-proxy/internal/retry"
+	"opencode-proxy/internal/scheduler"
 	"strings"
 	"testing"
 
@@ -18,14 +19,14 @@ func TestCellKeyVariants(t *testing.T) {
 		want    string
 		prio    int
 	}{
-		{"main", nil, "s:sess", PriorityMain},
-		{"agent", map[string]string{"X-Claude-Code-Agent-Id": "a1"}, "s:sess:a:a1", PrioritySubagent},
-		{"auxiliary", map[string]string{"X-Claude-Code-Request-Class": "auxiliary"}, "s:sess:aux", PriorityAuxiliary},
-		{"compaction", map[string]string{"X-Claude-Code-Compaction": "1", "X-Claude-Code-Agent-Id": "a1"}, "s:sess", PriorityMain},
+		{"main", nil, "s:sess", scheduler.PriorityMain},
+		{"agent", map[string]string{"X-Claude-Code-Agent-Id": "a1"}, "s:sess:a:a1", scheduler.PrioritySubagent},
+		{"auxiliary", map[string]string{"X-Claude-Code-Request-Class": "auxiliary"}, "s:sess:aux", scheduler.PriorityAuxiliary},
+		{"compaction", map[string]string{"X-Claude-Code-Compaction": "1", "X-Claude-Code-Agent-Id": "a1"}, "s:sess", scheduler.PriorityMain},
 		{"agent wins over class", map[string]string{
 			"X-Claude-Code-Agent-Id":      "a1",
 			"X-Claude-Code-Request-Class": "auxiliary",
-		}, "s:sess:aux", PriorityAuxiliary},
+		}, "s:sess:aux", scheduler.PriorityAuxiliary},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)

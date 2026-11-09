@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"opencode-proxy/internal/retry"
+	"opencode-proxy/internal/scheduler"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,7 +87,7 @@ type Proxy struct {
 	costs *CostStore
 	usage *UsageLedger
 
-	sched *CellScheduler
+	sched *scheduler.CellScheduler
 
 	// onRecord observes every logged record. It is a test seam; production
 	// code leaves it nil.
@@ -106,14 +107,14 @@ func NewProxy(cfg *ConfigLoader, reg *Registry, log *Logger, client *http.Client
 		tokens:     newTokenCache(),
 		catalog:    newLiveCatalog(),
 		costs:      store,
-		sched:      NewCellScheduler(8),
+		sched:      scheduler.NewCellScheduler(8),
 		countSlots: make(chan struct{}, countTokensConcurrency),
 	}
 }
 
 // SetScheduler swaps the cell scheduler, which main configures from the
 // scheduler section of the config.
-func (p *Proxy) SetScheduler(s *CellScheduler) {
+func (p *Proxy) SetScheduler(s *scheduler.CellScheduler) {
 	p.sched = s
 }
 
@@ -206,13 +207,13 @@ func cellKey(r *http.Request, session string) (key, agent, class string, priorit
 	class = r.Header.Get("X-Claude-Code-Request-Class")
 	switch {
 	case r.Header.Get("X-Claude-Code-Compaction") != "":
-		return "s:" + session, agent, class, PriorityMain
+		return "s:" + session, agent, class, scheduler.PriorityMain
 	case strings.EqualFold(class, "auxiliary"):
-		return "s:" + session + ":aux", agent, class, PriorityAuxiliary
+		return "s:" + session + ":aux", agent, class, scheduler.PriorityAuxiliary
 	case agent != "":
-		return "s:" + session + ":a:" + agent, agent, class, PrioritySubagent
+		return "s:" + session + ":a:" + agent, agent, class, scheduler.PrioritySubagent
 	default:
-		return "s:" + session, agent, class, PriorityMain
+		return "s:" + session, agent, class, scheduler.PriorityMain
 	}
 }
 
@@ -361,7 +362,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		waited = wait
 		if aerr != nil {
 			status = http.StatusTooManyRequests
-			if errors.Is(aerr, ErrQueueTimeout) {
+			if errors.Is(aerr, scheduler.ErrQueueTimeout) {
 				status = http.StatusTooManyRequests
 				w.Header().Set("Retry-After", "5")
 				writeOverloaded(w, "no upstream cell available within queue_timeout_ms")

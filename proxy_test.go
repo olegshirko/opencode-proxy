@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"opencode-proxy/internal/retry"
+	"opencode-proxy/internal/scheduler"
 	"os"
 	"path/filepath"
 	"strings"
@@ -546,7 +547,7 @@ func TestCountTokensDoesNotWaitForACell(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
 	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 2000 })
-	h.proxy.SetScheduler(NewCellScheduler(1))
+	h.proxy.SetScheduler(scheduler.NewCellScheduler(1))
 
 	mainDone := make(chan struct{})
 	go func() {
@@ -922,7 +923,7 @@ func TestPrefillRefusalTightensTheCeiling(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"prefill_cap_refused, retry after 30 s"}}`))
 	}, withRetry(retry.Config{MaxAttempts: 1, TotalBudgetMS: 1}))
-	h.proxy.SetScheduler(NewCellScheduler(8))
+	h.proxy.SetScheduler(scheduler.NewCellScheduler(8))
 
 	rec := h.do(t, http.MethodPost, "/v1/messages",
 		`{"model":"claude-GLM-5.3","messages":[]}`, nil)
@@ -948,7 +949,7 @@ func TestAllowanceRefusalLeavesTheCeilingAlone(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"monthly allowance exhausted"}}`))
 	}, withRetry(retry.Config{MaxAttempts: 1, TotalBudgetMS: 1}))
-	h.proxy.SetScheduler(NewCellScheduler(8))
+	h.proxy.SetScheduler(scheduler.NewCellScheduler(8))
 
 	rec := h.do(t, http.MethodPost, "/v1/messages",
 		`{"model":"claude-GLM-5.3","messages":[]}`, nil)
@@ -972,7 +973,7 @@ func TestQueueTimeoutAnswersOverloaded(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
 	}, func(c *Config) { c.Scheduler.QueueTimeoutMS = 50 })
-	h.proxy.SetScheduler(NewCellScheduler(1))
+	h.proxy.SetScheduler(scheduler.NewCellScheduler(1))
 
 	done := make(chan struct{})
 	go func() {
