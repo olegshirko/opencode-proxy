@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.opencode.proxy.models</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/opencode-proxy/bin/genmodels</string>
+    <string>-out</string>
+    <string>__HOME__/opencode-proxy/models.json</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__HOME__/opencode-proxy</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/opencode-proxy/var/genmodels.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/opencode-proxy/var/genmodels.log</string>
+</dict>
+</plist>

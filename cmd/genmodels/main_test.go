@@ -255,6 +255,61 @@ func TestRunWritesTheCatalog(t *testing.T) {
 	}
 }
 
+// Without -probe the generator must keep the availability each model already
+// has in models.json: the field comes from the regional probe, which an
+// unprobed run cannot re-check. Marking everything available would put
+// region-blocked models back into the picker.
+func TestRunPreservesAvailabilityWithoutProbe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[
+			{"id":"glm-5.3","name":"GLM 5.3","limit":{"context":256000},
+			 "capabilities":{"reasoning":{"effort":["none"]}},
+			 "cost":{"text":{"input":{"price":0.7},"output":{"price":2.8}}}},
+			{"id":"brand-new","name":"Brand New","limit":{"context":256000},
+			 "capabilities":{"reasoning":{"effort":["none"]}},
+			 "cost":{"text":{"input":{"price":0.1},"output":{"price":0.2}}}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "models.json")
+	existing := `{"models":[
+		{"id":"glm-5.3","picker":"claude-GL-5.3","label":"GLM 5.3","behaves_as":"claude-sonnet-5","available":false}
+	]}`
+	if err := os.WriteFile(out, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), options{out: out, catalogURL: srv.URL, probeURL: srv.URL},
+		&http.Client{}, &stdout, &stderr); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got modelFile
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %d, want 2", len(got.Models))
+	}
+	byID := map[string]model{}
+	for _, m := range got.Models {
+		byID[m.ID] = m
+	}
+	if m := byID["glm-5.3"]; m.Available {
+		t.Fatalf("glm-5.3 available = %v, want false carried over from the previous file", m.Available)
+	}
+	if m := byID["brand-new"]; !m.Available {
+		t.Fatalf("brand-new available = %v, want true (unknown models start available)", m.Available)
+	}
+}
+
 func TestRunFailsOnACatalogError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

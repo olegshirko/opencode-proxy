@@ -253,6 +253,8 @@ func run(ctx context.Context, opts options, hc *http.Client, stdout, stderr io.W
 			models[i].Available = Probe(ctx, opts.probeURL, token, models[i], hc)
 			fmt.Fprintf(stderr, "probe %-28s %v\n", models[i].ID, models[i].Available)
 		}
+	} else {
+		carryAvailability(opts.out, models)
 	}
 
 	data, err := json.MarshalIndent(modelFile{Models: models}, "", "  ")
@@ -298,4 +300,29 @@ func readToken(path string) string {
 		return tok
 	}
 	return doc.Token
+}
+
+// carryAvailability copies each model's `available` flag from the previous
+// models.json. The flag comes from the regional probe; a run without -probe
+// cannot re-check it, so the last probed answer stands. Models the file does
+// not know yet start available: the picker should show a brand-new catalog
+// entry until a probe says otherwise.
+func carryAvailability(out string, models []model) {
+	data, err := os.ReadFile(out)
+	if err != nil {
+		return
+	}
+	var prev modelFile
+	if json.Unmarshal(data, &prev) != nil {
+		return
+	}
+	known := make(map[string]bool, len(prev.Models))
+	for _, m := range prev.Models {
+		known[m.ID] = m.Available
+	}
+	for i := range models {
+		if av, ok := known[models[i].ID]; ok {
+			models[i].Available = av
+		}
+	}
 }

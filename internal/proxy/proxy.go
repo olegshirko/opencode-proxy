@@ -53,7 +53,7 @@ type Stats struct {
 // gateway.
 type Proxy struct {
 	cfg    *config.ConfigLoader
-	reg    *models.Registry
+	reg    atomic.Pointer[models.Registry]
 	log    *reqlog.Logger
 	client *http.Client
 
@@ -87,9 +87,8 @@ func NewProxy(cfg *config.ConfigLoader, reg *models.Registry, log *reqlog.Logger
 		client = &http.Client{}
 	}
 	store, _ := coststore.NewCostStore("")
-	return &Proxy{
+	p := &Proxy{
 		cfg:        cfg,
-		reg:        reg,
 		log:        log,
 		client:     client,
 		tokens:     newTokenCache(),
@@ -98,6 +97,24 @@ func NewProxy(cfg *config.ConfigLoader, reg *models.Registry, log *reqlog.Logger
 		sched:      scheduler.NewCellScheduler(8),
 		countSlots: make(chan struct{}, countTokensConcurrency),
 	}
+	p.reg.Store(reg)
+	return p
+}
+
+// SetRegistry swaps the model registry live: models.json is regenerated on a
+// schedule, and requests already in flight keep the registry they resolved
+// against.
+func (p *Proxy) SetRegistry(reg *models.Registry) {
+	p.reg.Store(reg)
+}
+
+// registry returns the registry to resolve against. A nil store yields an
+// empty registry rather than a nil dereference.
+func (p *Proxy) registry() *models.Registry {
+	if reg := p.reg.Load(); reg != nil {
+		return reg
+	}
+	return &models.Registry{}
 }
 
 // SetScheduler swaps the cell scheduler, which main configures from the
@@ -299,7 +316,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			thinking.StripSummaries(data)
 			if m, ok := data["model"].(string); ok {
-				target, reason := p.reg.Resolve(m, cfg.Models)
+				target, reason := p.registry().Resolve(m, cfg.Models)
 				// A model the gateway added after the last snapshot is not in
 				// the registry; the live catalog resolves it instead of letting
 				// it fall through to the default. The lookup only reads the

@@ -39,3 +39,40 @@ func TestCleanupStaleTempFiles(t *testing.T) {
 		}
 	}
 }
+
+// loadRegistryIfChanged feeds the mtime ticker: a regenerated models.json must
+// produce a fresh registry exactly once per change.
+func TestLoadRegistryIfChanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	write := func(data string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Give the file a distinctly new mtime even on coarse filesystems.
+		future := time.Now().Add(2 * time.Second)
+		if err := os.Chtimes(path, future, future); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"models":[{"id":"glm-5.3","picker":"claude-GL-5.3","available":true}]}`)
+
+	reg, changed, err := loadRegistryIfChanged(path, time.Time{})
+	if err != nil || !changed || reg == nil {
+		t.Fatalf("first load: changed=%v err=%v, want a fresh registry", changed, err)
+	}
+	mtime := regModTime(path)
+
+	if _, changed, err := loadRegistryIfChanged(path, mtime); changed || err != nil {
+		t.Fatalf("unchanged file: changed=%v err=%v, want nothing to do", changed, err)
+	}
+
+	write(`{"models":[{"id":"brand-new","picker":"claude-Brand-New","available":true}]}`)
+	reg, changed, err = loadRegistryIfChanged(path, mtime)
+	if err != nil || !changed {
+		t.Fatalf("changed file: changed=%v err=%v, want a fresh registry", changed, err)
+	}
+	if _, ok := reg.Native("brand-new"); !ok {
+		t.Fatal("the fresh registry does not know the new model")
+	}
+}

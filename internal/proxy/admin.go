@@ -73,7 +73,7 @@ func (p *Proxy) ModelsHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		// The gateway list is unreachable: serve the last snapshot rather than
 		// an empty picker.
-		for _, m := range p.reg.All() {
+		for _, m := range p.registry().All() {
 			if !m.Available {
 				continue
 			}
@@ -129,7 +129,7 @@ func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 		"listen":           cfg.Listen,
 		"started_at":       adminStart.UTC().Format(time.RFC3339),
 		"uptime_seconds":   int(time.Since(adminStart).Seconds()),
-		"models":           len(p.reg.All()),
+		"models":           len(p.registry().All()),
 		"requests":         st.Requests,
 		"retries":          st.Retries,
 		"upstream_429":     st.Upstream429,
@@ -295,14 +295,14 @@ type adminModel struct {
 
 func (p *Proxy) adminModels(w http.ResponseWriter, r *http.Request) {
 	cfg := p.cfg.Get()
-	all := p.reg.All()
+	all := p.registry().All()
 	out := make([]adminModel, 0, len(all))
 	for _, m := range all {
 		key := m.Picker
 		if key == "" {
 			key = m.ID
 		}
-		target, reason := p.reg.Resolve(key, cfg.Models)
+		target, reason := p.registry().Resolve(key, cfg.Models)
 		out = append(out, adminModel{Model: m, ResolvesTo: target, Reason: reason})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

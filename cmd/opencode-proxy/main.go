@@ -123,9 +123,14 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	// Pick up hand edits to config.json without a restart.
+	// Pick up hand edits to config.json and scheduled models.json
+	// regeneration without a restart.
 	stopReload := make(chan struct{})
 	go func() {
+		var regMtime time.Time
+		if info, err := os.Stat(modelsPath); err == nil {
+			regMtime = info.ModTime()
+		}
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -135,6 +140,13 @@ func main() {
 			case <-ticker.C:
 				if err := loader.ReloadIfChanged(); err != nil {
 					log.Printf("opencode-proxy: config reload failed, keeping the last good one: %v", err)
+				}
+				if reg, changed, err := loadRegistryIfChanged(modelsPath, regMtime); err != nil {
+					log.Printf("opencode-proxy: models.json reload failed, keeping the last good one: %v", err)
+				} else if changed {
+					p.SetRegistry(reg)
+					regMtime = regModTime(modelsPath)
+					log.Printf("opencode-proxy: reloaded models.json (%d models)", len(reg.All()))
 				}
 			}
 		}
@@ -174,4 +186,33 @@ func main() {
 	}
 	<-idle
 	log.Printf("opencode-proxy: stopped")
+}
+
+// loadRegistryIfChanged re-reads models.json when its mtime moved past last.
+// It reports changed=false when the file has not; a read or parse failure is
+// an error and leaves the caller's registry untouched.
+func loadRegistryIfChanged(path string, last time.Time) (*models.Registry, bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.ModTime().After(last) {
+		return nil, false, nil
+	}
+	reg, err := models.LoadRegistry(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return reg, true, nil
+}
+
+// regModTime reads the current mtime of the registry file, for the next
+// change check. A missing file yields the zero time, so the next successful
+// load counts as a change.
+func regModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }

@@ -1104,3 +1104,31 @@ func mustRegistry(t *testing.T, data string) *models.Registry {
 type discard struct{}
 
 func (*discard) Write(p []byte) (int, error) { return len(p), nil }
+
+// models.json is regenerated on a schedule; a swapped registry must be picked
+// up by the very next request without a restart.
+func TestSetRegistrySwapsResolution(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	})
+
+	h.do(t, http.MethodPost, "/v1/messages", `{"model":"claude-Brand-New","messages":[]}`, nil)
+	if rec := h.record(t); rec.Why != "default" {
+		t.Fatalf("before the swap: why = %q, want default", rec.Why)
+	}
+
+	reg := mustRegistry(t, `{"models":[
+		{"id":"brand-new","picker":"claude-Brand-New","label":"Brand New","available":true}
+	]}`)
+	h.proxy.SetRegistry(reg)
+
+	h.do(t, http.MethodPost, "/v1/messages", `{"model":"claude-Brand-New","messages":[]}`, nil)
+	rec := h.record(t)
+	if rec.Why != "picker" && rec.Why != "native" {
+		t.Fatalf("after the swap: why = %q, want picker or native", rec.Why)
+	}
+	if rec.ModelOut != "brand-new" {
+		t.Fatalf("after the swap: model = %q, want brand-new", rec.ModelOut)
+	}
+}

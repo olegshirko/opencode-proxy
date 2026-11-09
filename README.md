@@ -63,6 +63,36 @@ the app after regenerating: profiles are read at startup.
 
 ![generated model list in the app's gateway profile](docs/img/model-list.webp)
 
+A launchd timer regenerates `models.json` from the live catalog weekly — new models,
+prices, context windows — while the running proxy re-reads the file by mtime within
+seconds, no restart involved. The scheduled run does not probe: the last regional
+availability answers stand until you run `make models` yourself.
+
+```bash
+make timer             # build genmodels, install the weekly timer
+make timer-uninstall
+```
+
+## Layout
+
+```
+cmd/opencode-proxy/   entrypoint: wiring, launchd-facing flags
+cmd/genmodels/        models.json generator (catalog + optional regional probe)
+cmd/oc-search-mcp/    stdio MCP server for Claude Code web search
+internal/proxy/       request handler, streaming, retry loop, admin API, router
+internal/config/      config.json loader, hot reload, atomic save
+internal/models/      model registry and the claude-* → native id resolver
+internal/scheduler/   per-chain cell keys, priority queue, adaptive ceiling
+internal/retry/       retry ladder, Retry-After, x-should-retry
+internal/quota/       5-hour / weekly / monthly allowance windows
+internal/coststore/   per-session cost, survives restarts
+internal/catalog/     live gateway model list behind /v1/models
+internal/reqlog/      structured request log + traffic capture
+internal/thinking/    collapsible thinking summaries
+internal/atomicio/    crash-safe state file writes
+var/                  runtime state: logs, quota ledger, session cost (gitignored)
+```
+
 ## Observability
 
 One line per request:
