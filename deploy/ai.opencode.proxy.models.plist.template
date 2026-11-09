@@ -9,13 +9,14 @@
     <string>__HOME__/opencode-proxy/bin/genmodels</string>
     <string>-out</string>
     <string>__HOME__/opencode-proxy/models.json</string>
+    <string>-probe</string>
+    <string>-token-file</string>
+    <string>__HOME__/.claude/settings.json</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__HOME__/opencode-proxy</string>
   <key>StartCalendarInterval</key>
   <dict>
-    <key>Weekday</key>
-    <integer>0</integer>
     <key>Hour</key>
     <integer>4</integer>
     <key>Minute</key>

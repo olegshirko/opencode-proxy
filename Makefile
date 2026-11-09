@@ -62,15 +62,15 @@ verify:
 models:
 	go run ./cmd/genmodels -out models.json -probe -token-file $(HOME)/.claude/settings.json
 
-# Installs the weekly models.json refresh: the timer regenerates the file from
-# the live catalog (no probe, availability carries over) and the running proxy
-# picks it up by mtime, no restart involved.
+# Installs the daily models.json refresh: every night the timer regenerates
+# the file from the live catalog and probes availability; the running proxy
+# picks the file up by mtime, no restart involved.
 timer: genmodels
 	@mkdir -p $(CURDIR)/var
 	@sed -e 's|__HOME__|$(HOME)|g' deploy/ai.opencode.proxy.models.plist.template > $(TIMER)
 	@launchctl bootout gui/$(UID)/$(TIMER_LABEL) 2>/dev/null || true
 	@launchctl bootstrap gui/$(UID) $(TIMER)
-	@echo "installed $(TIMER); runs Sundays 04:17; log: var/genmodels.log"
+	@echo "installed $(TIMER); runs daily 04:17; log: var/genmodels.log"
 
 timer-uninstall:
 	@launchctl bootout gui/$(UID)/$(TIMER_LABEL) 2>/dev/null || true
