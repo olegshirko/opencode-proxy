@@ -155,7 +155,7 @@ type AdminConfig struct {
 func Defaults() Config {
 	logFile := "proxy.log"
 	if home, err := os.UserHomeDir(); err == nil {
-		logFile = filepath.Join(home, "opencode-proxy", "proxy.log")
+		logFile = filepath.Join(home, "opencode-proxy", "var", "proxy.log")
 	}
 
 	return Config{

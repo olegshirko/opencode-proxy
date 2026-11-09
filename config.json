@@ -3,7 +3,7 @@
   "upstream": "https://opencode.ai/inference/go/anthropic",
   "session_fallback": "my-session-1",
   "log": {
-    "file": "/Users/oleg/opencode-proxy/proxy.log",
+    "file": "/Users/oleg/opencode-proxy/var/proxy.log",
     "level": "info",
     "max_mb": 10,
     "keep": 5,
@@ -45,8 +45,8 @@
     "thinking_summary_wait_ms": 500
   },
   "connect_timeout_seconds": 15,
-  "session_cost_file": "/Users/oleg/opencode-proxy/session-cost.json",
-  "usage_file": "/Users/oleg/opencode-proxy/usage.json",
+  "session_cost_file": "/Users/oleg/opencode-proxy/var/session-cost.json",
+  "usage_file": "/Users/oleg/opencode-proxy/var/usage.json",
   "limits": {
     "monthly_usd": 30,
     "five_hour_fraction": 0.4,

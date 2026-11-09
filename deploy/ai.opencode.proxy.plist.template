@@ -19,8 +19,8 @@
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>StandardOutPath</key>
-  <string>__HOME__/opencode-proxy/service.out.log</string>
+  <string>__HOME__/opencode-proxy/var/service.out.log</string>
   <key>StandardErrorPath</key>
-  <string>__HOME__/opencode-proxy/service.err.log</string>
+  <string>__HOME__/opencode-proxy/var/service.err.log</string>
 </dict>
 </plist>

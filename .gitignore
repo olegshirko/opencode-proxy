@@ -1,15 +1,7 @@
 .venv/
-proxy.log
-*.jsonl
+bin/
+var/
 opencode-proxy
 .superpowers/
 .DS_Store
-bin/
 *.bak
-service.*.log
-session-cost.json
-*.jsonl.*
-session-cost.json.tmp-*
-usage.json
-proxy.out
-usage.json.tmp-*
