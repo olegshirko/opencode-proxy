@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,9 @@ import (
 // fakeCLI writes a script that stands in for the opencode binary.
 func fakeCLI(t *testing.T, stdout string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake opencode CLI is a POSIX shell script; windows coverage lands with phase 2")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
 	script := "#!/bin/sh\ncat <<'EOF'\n" + stdout + "\nEOF\n"
