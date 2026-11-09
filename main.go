@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -21,6 +22,29 @@ func defaultConfigPath() string {
 		return "config.json"
 	}
 	return filepath.Join(home, "opencode-proxy", "config.json")
+}
+
+// CleanupStaleTempFiles removes atomic-save leftovers (*.tmp-*). A relaunch mid-
+// flush leaves a zero-byte tmp file behind; nothing else will ever claim it, so
+// the working directory slowly fills with them. Files newer than maxAge stay -
+// a flush may genuinely be in progress right now.
+func CleanupStaleTempFiles(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	deadline := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.Contains(name, ".tmp-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(deadline) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name))
+	}
 }
 
 // buildRouter wires the admin control plane beside the proxy. Anything under
@@ -51,6 +75,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
+
+	// Relaunches that died mid-flush leave zero-byte tmp files behind; the
+	// next start is the only moment nothing claims them.
+	CleanupStaleTempFiles(filepath.Dir(*configPath), time.Hour)
 
 	modelsPath := filepath.Join(filepath.Dir(*configPath), "models.json")
 	registry, err := LoadRegistry(modelsPath)
