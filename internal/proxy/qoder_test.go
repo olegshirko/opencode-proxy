@@ -17,6 +17,7 @@ type qoderFake struct {
 	exchanges   atomic.Int64
 	completions atomic.Int64
 	failFirst   atomic.Int64 // if >0, the next completions call answers 401
+	failPrefill atomic.Int64 // if >0, the next completions call answers a prefill 429
 	lastAuth    atomic.Value // string
 	lastReqID   atomic.Value
 	lastSessID  atomic.Value
@@ -35,6 +36,12 @@ func (f *qoderFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":{"code":"auth_expired","msg":"job token rejected"}}`))
+			return
+		}
+		if f.failPrefill.Add(-1) >= 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"code":"prefill_cap_refused","msg":"too many cells prefilled"}}`))
 			return
 		}
 		f.lastAuth.Store(r.Header.Get("Authorization"))

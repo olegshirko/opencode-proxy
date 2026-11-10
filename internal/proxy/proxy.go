@@ -361,6 +361,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// before the OpenCode cell acquisition; handleQoder acquires its own
 	// (prefixed, Task 8) cell for real traffic.
 	if qroute := cfg.Models.RouteFor(modelOut); qroute != nil && qroute.IsQoder() {
+		// Provider-namespaced cells: a wedged Qoder request must not hold an
+		// OpenCode cell, and the ceilings are learned per provider.
+		cell = "qoder/" + cell
 		status, attempts, acc, aborted, billable = p.handleQoder(w, r, cfg, body, qroute, modelIn, modelOut, cell, prio, streamReq)
 		return
 	}
