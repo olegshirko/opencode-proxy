@@ -16,6 +16,7 @@ import (
 type qoderFake struct {
 	exchanges   atomic.Int64
 	completions atomic.Int64
+	failFirst   atomic.Int64 // if >0, the next completions call answers 401
 	lastAuth    atomic.Value // string
 	lastReqID   atomic.Value
 	lastSessID  atomic.Value
@@ -30,6 +31,12 @@ func (f *qoderFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"token":"jobtok","refresh_token":"ref1","expires_in":3600}`))
 	case r.URL.Path == "/model/v1/chat/completions":
 		f.completions.Add(1)
+		if f.failFirst.Add(-1) >= 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":{"code":"auth_expired","msg":"job token rejected"}}`))
+			return
+		}
 		f.lastAuth.Store(r.Header.Get("Authorization"))
 		f.lastReqID.Store(r.Header.Get("X-Request-ID"))
 		f.lastSessID.Store(r.Header.Get("X-Session-ID"))

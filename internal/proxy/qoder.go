@@ -47,7 +47,7 @@ func qoderUUID() string {
 // the upstream SSE assembled into one message body (streaming has its own
 // path, wired in handleQoderStream).
 func (p *Proxy) handleQoder(w http.ResponseWriter, r *http.Request, cfg *config.Config,
-	body []byte, route *models.Route, modelOut string, cell string, prio int, streamReq bool,
+	body []byte, route *models.Route, modelIn, modelOut string, cell string, prio int, streamReq bool,
 ) (status, attempts int, acc usageAccumulator, aborted, billable bool) {
 	ctx := r.Context()
 	billable = true
@@ -120,6 +120,19 @@ func (p *Proxy) handleQoder(w http.ResponseWriter, r *http.Request, cfg *config.
 	if status < 200 || status >= 300 {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		http.Error(w, strings.TrimSpace(string(payload)), status)
+		return
+	}
+
+	if streamReq {
+		// The upstream SSE is OpenAI-shaped; hand the client a response whose
+		// body is the same stream translated to Anthropic events. relayResponse
+		// then does what it does for OpenCode: parse, think-plates, usage acc.
+		synthetic := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       translateReader(resp.Body, modelOut),
+		}
+		acc, aborted = relayResponse(ctx, w, synthetic, nil, cfg, modelIn)
 		return
 	}
 
@@ -196,6 +209,18 @@ func (p *Proxy) qoderAttempt(ctx context.Context, mgr *qoderauth.Manager, baseUR
 		}
 		return resp, try, nil
 	}
+}
+
+// translateReader converts an OpenAI-shaped SSE stream into Anthropic events
+// on the fly: the relay pipeline downstream never sees the difference.
+func translateReader(src io.ReadCloser, model string) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := qoderchat.TranslateStream(src, pw, model)
+		_ = src.Close()
+		_ = pw.CloseWithError(err) // nil err closes cleanly
+	}()
+	return pr
 }
 
 func buildQoderUpstream(ctx context.Context, baseURL string, translatedBody []byte,
