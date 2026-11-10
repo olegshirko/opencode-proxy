@@ -14,6 +14,7 @@ import (
 	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/coststore"
 	"opencode-proxy/internal/models"
+	"opencode-proxy/internal/qoderauth"
 	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/reqlog"
 	"opencode-proxy/internal/retry"
@@ -74,6 +75,12 @@ type Proxy struct {
 
 	costs *coststore.CostStore
 	usage *quota.UsageLedger
+
+	// qoderAuth exchanges the PAT for jobTokens; qoderCfg mirrors the config
+	// section it was built from so hot reload rebuilds it on change.
+	qoderMu   sync.Mutex
+	qoderCfg  qoderauth.Config
+	qoderAuth *qoderauth.Manager
 
 	sched *scheduler.CellScheduler
 
@@ -348,6 +355,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// A Qoder route owns the whole request lifecycle: its own token manager,
+	// its own wire format, its own count_tokens answer. Dispatch happens
+	// before the OpenCode cell acquisition; handleQoder acquires its own
+	// (prefixed, Task 8) cell for real traffic.
+	if qroute := cfg.Models.RouteFor(modelOut); qroute != nil && qroute.IsQoder() {
+		status, attempts, acc, aborted, billable = p.handleQoder(w, r, cfg, body, qroute, modelOut, cell, prio, streamReq)
+		return
+	}
 
 	// Each agent chain gets its own upstream cell, so parallel subagents stop
 	// colliding on one cell and refusing each other by prefill. Token counting
