@@ -58,10 +58,38 @@ func LoadRegistry(path string) (*Registry, error) {
 	for i, m := range file.Models {
 		r.byID[strings.ToLower(m.ID)] = i
 		if m.Picker != "" {
-			r.byPicker[strings.ToLower(m.Picker)] = i
+			lower := strings.ToLower(m.Picker)
+			if prev, dup := r.byPicker[lower]; dup {
+				return nil, fmt.Errorf("models: duplicate picker %q (ids %q and %q): a picker name must resolve to exactly one model",
+					m.Picker, file.Models[prev].ID, m.ID)
+			}
+			r.byPicker[lower] = i
 		}
 	}
 	return r, nil
+}
+
+// ValidateAgainst rejects settings whose route pickers would silently shadow
+// a catalog model or each other: the route is checked before the registry, so
+// a clash would redirect traffic without a trace.
+func (m Settings) ValidateAgainst(reg *Registry) error {
+	seen := map[string]string{} // lower picker -> first route id
+	for i := range m.Routes {
+		r := &m.Routes[i]
+		picker := strings.ToLower(strings.TrimSpace(r.Picker))
+		if picker == "" {
+			continue
+		}
+		if first, dup := seen[picker]; dup {
+			return fmt.Errorf("config: routes %q and %q share picker %q", first, r.ID, r.Picker)
+		}
+		seen[picker] = r.ID
+		if idx, exists := reg.byPicker[picker]; exists {
+			return fmt.Errorf("config: route %q picker %q shadows catalog model %q (picker %q): rename it (e.g. claude-qoder-*)",
+				r.ID, r.Picker, reg.models[idx].ID, reg.models[idx].Picker)
+		}
+	}
+	return nil
 }
 
 // Native returns the model whose id matches id, ignoring case.
@@ -151,7 +179,14 @@ type Route struct {
 	BaseURL   string  `json:"base_url"`
 	TokenEnv  string  `json:"token_env"`
 	TokenFile string  `json:"token_file"`
+	Auth      string  `json:"auth"`
 	Pricing   Pricing `json:"pricing"`
+}
+
+// IsQoder reports that the route speaks Qoder's OpenAI-compatible chat API
+// with a proxy-managed jobToken instead of a static credential.
+func (r *Route) IsQoder() bool {
+	return r != nil && strings.EqualFold(strings.TrimSpace(r.Auth), "qoder")
 }
 
 // Matches reports whether the route owns this model name, which may be the

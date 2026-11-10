@@ -20,19 +20,23 @@ import (
 // Default hosts and lifetimes, from the app's own constants (the design spec
 // lists them; the spike confirms).
 const (
-	DefaultOpenAPIBaseURL = "https://openapi.qoder.sh"
-	DefaultRefreshMargin  = 60 * time.Second
+	DefaultOpenAPIBaseURL   = "https://openapi.qoder.sh"
+	DefaultInferenceBaseURL = "https://api1.qoder.sh"
+	DefaultRefreshMargin    = 60 * time.Second
 
 	pathExchange = "/api/v1/jobToken/exchange"
 	pathRefresh  = "/api/v1/jobToken/refresh"
 )
 
-// Config points at the PAT and the host that trades it for a jobToken.
+// Config points at the PAT and the hosts the proxy talks to. InferenceBaseURL
+// is not used by this package — the proxy builds its chat requests from it —
+// but the qoder config section owns both hosts together.
 type Config struct {
-	OpenAPIBaseURL  string `json:"openapi_base_url"`
-	TokenEnv        string `json:"token_env"`
-	TokenFile       string `json:"token_file"`
-	RefreshMarginMS int    `json:"refresh_margin_ms"`
+	OpenAPIBaseURL   string `json:"openapi_base_url"`
+	InferenceBaseURL string `json:"inference_base_url"`
+	TokenEnv         string `json:"token_env"`
+	TokenFile        string `json:"token_file"`
+	RefreshMarginMS  int    `json:"refresh_margin_ms"`
 }
 
 // Status is the admin view of the manager. It carries no secret material.
@@ -89,6 +93,9 @@ type Manager struct {
 func New(cfg Config, client *http.Client, now func() time.Time) *Manager {
 	if cfg.OpenAPIBaseURL == "" {
 		cfg.OpenAPIBaseURL = DefaultOpenAPIBaseURL
+	}
+	if cfg.InferenceBaseURL == "" {
+		cfg.InferenceBaseURL = DefaultInferenceBaseURL
 	}
 	if cfg.RefreshMarginMS <= 0 {
 		cfg.RefreshMarginMS = int(DefaultRefreshMargin / time.Millisecond)

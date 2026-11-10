@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opencode-proxy/internal/atomicio"
+	"opencode-proxy/internal/qoderauth"
 	"opencode-proxy/internal/quota"
 	"opencode-proxy/internal/retry"
 )
@@ -18,18 +19,19 @@ import (
 // Config is the proxy configuration. It lives in one JSON file that is
 // reread on mtime changes so edits apply without a restart.
 type Config struct {
-	Listen                string          `json:"listen"`
-	Upstream              string          `json:"upstream"`
-	SessionFallback       string          `json:"session_fallback"`
-	Log                   reqlog.Config   `json:"log"`
-	Models                models.Settings `json:"models"`
-	Retry                 retry.Config    `json:"retry"`
-	Admin                 AdminConfig     `json:"admin"`
-	Scheduler             SchedulerConfig `json:"scheduler"`
-	ConnectTimeoutSeconds int             `json:"connect_timeout_seconds"`
-	SessionCostFile       string          `json:"session_cost_file"`
-	UsageFile             string          `json:"usage_file"`
-	Limits                quota.Limits    `json:"limits"`
+	Listen                string           `json:"listen"`
+	Upstream              string           `json:"upstream"`
+	SessionFallback       string           `json:"session_fallback"`
+	Log                   reqlog.Config    `json:"log"`
+	Models                models.Settings  `json:"models"`
+	Retry                 retry.Config     `json:"retry"`
+	Admin                 AdminConfig      `json:"admin"`
+	Scheduler             SchedulerConfig  `json:"scheduler"`
+	ConnectTimeoutSeconds int              `json:"connect_timeout_seconds"`
+	SessionCostFile       string           `json:"session_cost_file"`
+	UsageFile             string           `json:"usage_file"`
+	Limits                quota.Limits     `json:"limits"`
+	Qoder                 qoderauth.Config `json:"qoder"`
 }
 
 // SchedulerConfig tunes cell assignment and the keepalive used while retrying.
@@ -104,6 +106,11 @@ func Defaults() Config {
 			FiveHourFraction: 0.2,
 			WeeklyFraction:   0.5,
 			WarningFraction:  0.85,
+		},
+		Qoder: qoderauth.Config{
+			OpenAPIBaseURL:   qoderauth.DefaultOpenAPIBaseURL,
+			InferenceBaseURL: qoderauth.DefaultInferenceBaseURL,
+			RefreshMarginMS:  int(qoderauth.DefaultRefreshMargin / time.Millisecond),
 		},
 	}
 }
