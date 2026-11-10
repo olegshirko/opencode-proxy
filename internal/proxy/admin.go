@@ -142,6 +142,7 @@ func (p *Proxy) adminStatus(w http.ResponseWriter, r *http.Request) {
 		"cell_limit":       st.CellLimit,
 		"prefill_refusals": st.PrefillRefusals,
 		"quota":            p.Quota(cfg.Limits, time.Now()),
+		"qoder":            p.qoderManagerFor(cfg).Status(),
 	})
 }
 

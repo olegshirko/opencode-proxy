@@ -187,6 +187,54 @@ tail -f var/proxy.log       # one line per request
 `launchctl kickstart -k gui/$(id -u)/ai.opencode.proxy` restarts the service the hard
 way; `make restart` is the polite path.
 
+## Qoder upstream (optional)
+
+A second subscription — Qoder — can serve models through the same proxy. The client
+never sees a difference: it keeps speaking Anthropic to `127.0.0.1:4000`, and the proxy
+translates to Qoder's OpenAI-compatible chat API, including the SSE stream. The proxy
+also owns the credentials: you give it a Personal Access Token once, and it exchanges
+that PAT for a short-lived jobToken and refreshes it on its own.
+
+1. Create a PAT in the Qoder app: **Account → Integrations → Personal Access Token**
+   (it is shown once). Keep it out of git — a file works best:
+
+   ```bash
+   mkdir -p var && umask 077 && printf 'PASTE_TOKEN_HERE' > var/qoder-pat.txt
+   ```
+
+2. Point a route at Qoder in `config.json` (edit applies live):
+
+   ```json
+   "qoder": {
+     "token_file": "/path/to/opencode-proxy/var/qoder-pat.txt"
+   },
+   "models": {
+     "routes": [
+       { "id": "<qoder-model-id>", "picker": "claude-qoder-<short>", "label": "Qoder <model>",
+         "auth": "qoder", "base_url": "https://api1.qoder.sh",
+         "context": 200000, "behaves_as": "claude-sonnet-5-5" }
+     ]
+   }
+   ```
+
+   `token_env` works instead of `token_file`. The model id comes from Qoder's catalog
+   (`GET api1.qoder.sh/api/v2/model/list`, needs the token); picker names must not
+   shadow catalog models — the proxy refuses such a config at startup.
+
+3. Restart Claude Code and pick the model in `/model`.
+
+What to know:
+
+- **Counting**: `count_tokens` on a Qoder route is a local estimate (chars/4) — Qoder
+  has no token-count endpoint; the number is an approximation.
+- **Budget**: Qoder traffic shows up in the status line and per-session cost, but it
+  does **not** consume the OpenCode budget windows — separate subscription, separate
+  ledger (`/admin/status` → `qoder` shows exchange/refresh counters and state).
+- **Background traffic** stays on OpenCode: `models.default`/`background` are untouched;
+  only explicitly picked models go to Qoder.
+- **Failures are loud**: a missing or expired PAT answers 502 with a message naming the
+  qoder config — the proxy never silently falls back to OpenCode.
+
 ## Design docs
 
 - [`docs/2026-11-07-opencode-proxy-design.md`](docs/2026-11-07-opencode-proxy-design.md) — the full design: resolver order, retry policy, logging, admin API
