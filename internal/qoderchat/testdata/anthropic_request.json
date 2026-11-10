@@ -1,0 +1,30 @@
+{
+  "model": "claude-sonnet-5",
+  "max_tokens": 1024,
+  "temperature": 0.2,
+  "stop_sequences": ["END"],
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}
+  ],
+  "tools": [
+    {"name": "get_weather", "description": "Weather lookup", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+  ],
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "Hi, what is the weather?", "cache_control": {"type": "ephemeral"}}
+    ]},
+    {"role": "assistant", "content": [
+      {"type": "thinking", "thinking": "internal scratch", "signature": "sig"},
+      {"type": "text", "text": "Let me check."},
+      {"type": "tool_use", "id": "tu_1", "name": "get_weather", "input": {"city": "MSK"}}
+    ]},
+    {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "tu_1", "content": "sunny"}
+    ]},
+    {"role": "user", "content": [
+      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+      {"type": "text", "text": "And here?"}
+    ]}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "model": "qoder-model",
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "metadata": {"context": {"request_id": "req-1", "session_id": "sess-1", "client_type": "opencode-proxy"}},
+  "max_tokens": 1024,
+  "temperature": 0.2,
+  "stop": ["END"],
+  "tools": [
+    {"type": "function", "function": {"name": "get_weather", "description": "Weather lookup", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}
+  ],
+  "messages": [
+    {"role": "system", "content": "You are a coding agent."},
+    {"role": "user", "content": "Hi, what is the weather?"},
+    {"role": "assistant", "content": "Let me check.", "tool_calls": [
+      {"id": "tu_1", "type": "function", "function": {"name": "get_weather", "arguments": {"city": "MSK"}}}
+    ]},
+    {"role": "tool", "tool_call_id": "tu_1", "content": "sunny"},
+    {"role": "user", "content": [
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+      {"type": "text", "text": "And here?"}
+    ]}
+  ]
+}
