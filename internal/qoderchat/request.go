@@ -141,16 +141,16 @@ func TranslateRequest(anthropic []byte, model string, meta RequestMeta) ([]byte,
 	}
 
 	for i, msg := range in.Messages {
-		qm, err := translateMessage(msg)
+		qms, err := translateMessage(msg)
 		if err != nil {
 			return nil, err
 		}
 		// A tool_result belongs to the tool call before it; the proxy never
 		// sees one without a matching assistant tool_use.
-		if qm.Role == "tool" && i == 0 {
+		if i == 0 && len(qms) > 0 && qms[0].Role == "tool" {
 			return nil, fmt.Errorf("%w: tool result before any assistant message", ErrUnsupported)
 		}
-		out.Messages = append(out.Messages, qm)
+		out.Messages = append(out.Messages, qms...)
 	}
 
 	for _, tl := range in.Tools {
@@ -179,20 +179,20 @@ func TranslateRequest(anthropic []byte, model string, meta RequestMeta) ([]byte,
 	return body, nil
 }
 
-func translateMessage(msg anthropicMessage) (qoderMessage, error) {
+func translateMessage(msg anthropicMessage) ([]qoderMessage, error) {
 	// Plain string content: 1:1.
 	var contentStr string
 	if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
-		return qoderMessage{Role: msg.Role, Content: contentStr}, nil
+		return []qoderMessage{{Role: msg.Role, Content: contentStr}}, nil
 	}
 
 	var blocks []anthropicBlock
 	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
-		return qoderMessage{}, fmt.Errorf("%w: message content: %v", ErrUnsupported, err)
+		return nil, fmt.Errorf("%w: message content: %v", ErrUnsupported, err)
 	}
 
 	if msg.Role == "user" && len(blocks) > 0 && blocks[0].Type == "tool_result" {
-		return toolResultMessage(blocks)
+		return toolResultMessages(blocks)
 	}
 
 	qm := qoderMessage{Role: msg.Role}
@@ -207,7 +207,7 @@ func translateMessage(msg anthropicMessage) (qoderMessage, error) {
 		case "image":
 			src := b.Source
 			if src.Type != "base64" {
-				return qoderMessage{}, fmt.Errorf("%w: image source %q", ErrUnsupported, src.Type)
+				return nil, fmt.Errorf("%w: image source %q", ErrUnsupported, src.Type)
 			}
 			parts = append(parts, contentPart{
 				Type: "image_url",
@@ -226,7 +226,7 @@ func translateMessage(msg anthropicMessage) (qoderMessage, error) {
 			toolCalls[len(toolCalls)-1].Function.Name = b.Name
 			toolCalls[len(toolCalls)-1].Function.Arguments = rawOrNull(b.Input)
 		default:
-			return qoderMessage{}, fmt.Errorf("%w: content block %q", ErrUnsupported, b.Type)
+			return nil, fmt.Errorf("%w: content block %q", ErrUnsupported, b.Type)
 		}
 	}
 
@@ -241,21 +241,20 @@ func translateMessage(msg anthropicMessage) (qoderMessage, error) {
 	case len(texts) > 0:
 		qm.Content = strings.Join(texts, "\n\n")
 	}
-	return qm, nil
+	return []qoderMessage{qm}, nil
 }
 
-func toolResultMessage(blocks []anthropicBlock) (qoderMessage, error) {
-	qm := qoderMessage{Role: "tool"}
-	var texts []string
+// toolResultMessages maps one Anthropic message of tool_result blocks to the
+// OpenAI wire shape: one role:"tool" message per block, each carrying its own
+// tool_call_id. Parallel tool execution — several results in one user turn —
+// is the canonical Claude Code transcript shape and must not be rejected.
+func toolResultMessages(blocks []anthropicBlock) ([]qoderMessage, error) {
+	var out []qoderMessage
 	for _, b := range blocks {
 		if b.Type != "tool_result" {
-			return qoderMessage{}, fmt.Errorf("%w: tool_result block mixed with %q", ErrUnsupported, b.Type)
+			return nil, fmt.Errorf("%w: tool_result block mixed with %q", ErrUnsupported, b.Type)
 		}
-		if qm.ToolCallID == "" {
-			qm.ToolCallID = b.ToolUseID
-		} else if qm.ToolCallID != b.ToolUseID {
-			return qoderMessage{}, fmt.Errorf("%w: tool_result blocks with different tool_use_id", ErrUnsupported)
-		}
+		var texts []string
 		switch {
 		case b.Content != nil:
 			var s string
@@ -264,7 +263,7 @@ func toolResultMessage(blocks []anthropicBlock) (qoderMessage, error) {
 			} else {
 				var inner []anthropicBlock
 				if err := json.Unmarshal(b.Content, &inner); err != nil {
-					return qoderMessage{}, fmt.Errorf("%w: tool_result content: %v", ErrUnsupported, err)
+					return nil, fmt.Errorf("%w: tool_result content: %v", ErrUnsupported, err)
 				}
 				for _, ib := range inner {
 					if ib.Type == "text" {
@@ -275,9 +274,13 @@ func toolResultMessage(blocks []anthropicBlock) (qoderMessage, error) {
 		case b.IsError:
 			texts = append(texts, "tool error")
 		}
+		out = append(out, qoderMessage{
+			Role:       "tool",
+			ToolCallID: b.ToolUseID,
+			Content:    strings.Join(texts, "\n\n"),
+		})
 	}
-	qm.Content = strings.Join(texts, "\n\n")
-	return qm, nil
+	return out, nil
 }
 
 func translateToolChoice(raw json.RawMessage) (any, error) {
