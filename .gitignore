@@ -1,7 +1,7 @@
 .venv/
 bin/
 var/
-opencode-proxy
+/opencode-proxy
 .superpowers/
 .DS_Store
 *.bak

@@ -65,7 +65,7 @@ func main() {
 	CleanupStaleTempFiles(filepath.Dir(*configPath), time.Hour)
 
 	modelsPath := filepath.Join(filepath.Dir(*configPath), "models.json")
-	registry, existed, err := loadRegistryOrDefault(modelsPath)
+	registry, existed, err := loadAndValidateRegistry(modelsPath, loader.Get().Models)
 	if err != nil {
 		log.Fatalf("opencode-proxy: %v", err)
 	}
@@ -126,10 +126,6 @@ func main() {
 	// regeneration without a restart.
 	stopReload := make(chan struct{})
 	go func() {
-		var regMtime time.Time
-		if info, err := os.Stat(modelsPath); err == nil {
-			regMtime = info.ModTime()
-		}
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -140,11 +136,10 @@ func main() {
 				if err := loader.ReloadIfChanged(); err != nil {
 					log.Printf("opencode-proxy: config reload failed, keeping the last good one: %v", err)
 				}
-				if reg, changed, err := loadRegistryIfChanged(modelsPath, regMtime); err != nil {
+				if reg, changed, err := loadAndValidateRegistry(modelsPath, loader.Get().Models); err != nil {
 					log.Printf("opencode-proxy: models.json reload failed, keeping the last good one: %v", err)
 				} else if changed {
 					p.SetRegistry(reg)
-					regMtime = regModTime(modelsPath)
 					log.Printf("opencode-proxy: reloaded models.json (%d models)", len(reg.All()))
 				}
 			}
@@ -203,6 +198,21 @@ func loadRegistryIfChanged(path string, last time.Time) (*models.Registry, bool,
 		return nil, false, err
 	}
 	return reg, true, nil
+}
+
+// loadAndValidateRegistry is loadRegistryOrDefault plus the picker-shadowing
+// check: a route picker that equals a catalog picker would silently redirect
+// traffic (routes resolve before the registry), so the config is rejected
+// instead.
+func loadAndValidateRegistry(path string, settings models.Settings) (*models.Registry, bool, error) {
+	reg, existed, err := loadRegistryOrDefault(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := settings.ValidateAgainst(reg); err != nil {
+		return nil, existed, err
+	}
+	return reg, existed, nil
 }
 
 // regModTime reads the current mtime of the registry file, for the next
