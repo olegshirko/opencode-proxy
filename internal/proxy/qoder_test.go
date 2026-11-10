@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opencode-proxy/internal/config"
 	"opencode-proxy/internal/models"
@@ -18,6 +19,7 @@ type qoderFake struct {
 	completions atomic.Int64
 	failFirst   atomic.Int64 // if >0, the next completions call answers 401
 	failPrefill atomic.Int64 // if >0, the next completions call answers a prefill 429
+	slowStream  atomic.Bool  // stream many chunks slowly, like a real generation
 	lastAuth    atomic.Value // string
 	lastReqID   atomic.Value
 	lastSessID  atomic.Value
@@ -51,6 +53,22 @@ func (f *qoderFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = r.Body.Read(body)
 		f.lastBody.Store(body)
 		w.Header().Set("Content-Type", "text/event-stream")
+		if f.slowStream.Load() {
+			// A real generation: ~1MB over ~a second, enough to overflow the
+			// socket buffers so a walked-away client actually breaks the
+			// server's writes mid-stream.
+			big := strings.Repeat("x", 2048)
+			flusher, _ := w.(http.Flusher)
+			for i := 0; i < 500; i++ {
+				w.Write([]byte("data: {\"id\":\"c1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"" + big + "\"}}]}\n\n"))
+				if flusher != nil {
+					flusher.Flush()
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			w.Write([]byte("data: [DONE]\n\n"))
+			return
+		}
 		w.Write([]byte("data: {\"id\":\"c1\",\"model\":\"qoder-test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n" +
 			"data: {\"id\":\"c1\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3}}\n\n" +
 			"data: [DONE]\n\n"))

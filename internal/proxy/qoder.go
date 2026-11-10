@@ -127,10 +127,15 @@ func (p *Proxy) handleQoder(w http.ResponseWriter, r *http.Request, cfg *config.
 		// The upstream SSE is OpenAI-shaped; hand the client a response whose
 		// body is the same stream translated to Anthropic events. relayResponse
 		// then does what it does for OpenCode: parse, think-plates, usage acc.
+		// The translated body MUST be closed even when the relay aborts early:
+		// closing it unblocks the reader goroutine (which closing the upstream
+		// body alone cannot do once that goroutine is parked in a pipe write).
+		body := translateReader(resp.Body, modelOut)
+		defer body.Close()
 		synthetic := &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": {"text/event-stream"}},
-			Body:       translateReader(resp.Body, modelOut),
+			Body:       body,
 		}
 		acc, aborted = relayResponse(ctx, w, synthetic, nil, cfg, modelIn)
 		return
@@ -211,16 +216,37 @@ func (p *Proxy) qoderAttempt(ctx context.Context, mgr *qoderauth.Manager, baseUR
 	}
 }
 
+// translatedBody is the client-facing half of translateReader. Its Close is
+// the unwind switch: it unblocks the reader goroutine whether the goroutine
+// is parked in a pipe write (pr.Close) or in an upstream read (src.Close),
+// then waits for it to exit — so a caller that Closes never leaks.
+type translatedBody struct {
+	pr   *io.PipeReader
+	src  io.ReadCloser
+	done chan struct{}
+}
+
+func (t *translatedBody) Read(p []byte) (int, error) { return t.pr.Read(p) }
+
+func (t *translatedBody) Close() error {
+	err := t.pr.Close() // goroutine parked in a pipe write fails now
+	_ = t.src.Close()   // goroutine parked in an upstream read fails now
+	<-t.done            // and exits — Close does not return before that
+	return err
+}
+
 // translateReader converts an OpenAI-shaped SSE stream into Anthropic events
 // on the fly: the relay pipeline downstream never sees the difference.
-func translateReader(src io.ReadCloser, model string) io.ReadCloser {
+func translateReader(src io.ReadCloser, model string) *translatedBody {
 	pr, pw := io.Pipe()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_, err := qoderchat.TranslateStream(src, pw, model)
 		_ = src.Close()
 		_ = pw.CloseWithError(err) // nil err closes cleanly
 	}()
-	return pr
+	return &translatedBody{pr: pr, src: src, done: done}
 }
 
 func buildQoderUpstream(ctx context.Context, baseURL string, translatedBody []byte,
