@@ -244,54 +244,6 @@ tail -f var/proxy.log       # по строке на запрос
 `launchctl kickstart -k gui/$(id -u)/ai.opencode.proxy` перезапускает сервис жёстко;
 `make restart` — вежливый путь.
 
-## Апстрим Qoder (опционально)
-
-Вторая подписка — Qoder — может отдавать модели через тот же прокси. Клиент не видит
-разницы: он продолжает говорить на Anthropic с `127.0.0.1:4000`, а прокси транслирует
-в OpenAI-совместимый chat API Qoder, включая SSE-поток. Прокси также владеет кредами:
-вы один раз даёте ему Personal Access Token, а он сам меняет PAT на короткоживущий
-jobToken и обновляет его.
-
-1. Создайте PAT в приложении Qoder: **Account → Integrations → Personal Access Token**
-   (показывается один раз). Не коммитьте его в git — лучше всего файл:
-
-   ```bash
-   mkdir -p var && umask 077 && printf 'PASTE_TOKEN_HERE' > var/qoder-pat.txt
-   ```
-
-2. Направьте маршрут на Qoder в `config.json` (правка применяется на лету):
-
-   ```json
-   "qoder": {
-     "token_file": "/path/to/opencode-proxy/var/qoder-pat.txt"
-   },
-   "models": {
-     "routes": [
-       { "id": "<qoder-model-id>", "picker": "claude-qoder-<short>", "label": "Qoder <model>",
-         "auth": "qoder", "base_url": "https://api1.qoder.sh",
-         "context": 200000, "behaves_as": "claude-sonnet-5-5" }
-     ]
-   }
-   ```
-
-   `token_env` работает вместо `token_file`. Id модели берётся из каталога Qoder
-   (`GET api1.qoder.sh/api/v2/model/list`, нужен токен); имена пикера не должны
-   перекрывать модели каталога — такой конфиг прокси отвергает на старте.
-
-3. Перезапустите Claude Code и выберите модель в `/model`.
-
-Что знать:
-
-- **Подсчёт**: `count_tokens` на маршруте Qoder — локальная оценка (символы/4) —
-  у Qoder нет эндпоинта подсчёта токенов; число приблизительное.
-- **Бюджет**: трафик Qoder виден в строке статуса и стоимости сессии, но **не**
-  расходует окна бюджета OpenCode — отдельная подписка, отдельная книга
-  (`/admin/status` → `qoder` показывает счётчики обмена/обновления и состояние).
-- **Фоновый трафик** остаётся на OpenCode: `models.default`/`background` не
-  трогаются; на Qoder уходят только явно выбранные модели.
-- **Ошибки громкие**: отсутствующий или протухший PAT отвечает 502 с сообщением,
-  называющим конфиг qoder — прокси никогда молча не откатывается на OpenCode.
-
 ## Дизайн-доки
 
 На английском:
