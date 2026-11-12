@@ -31,6 +31,7 @@ func (p *Proxy) AdminHandler() http.Handler {
 	mux.HandleFunc("GET /admin/models", p.adminModels)
 	mux.HandleFunc("PUT /admin/models/aliases", p.adminPutAliases)
 	mux.HandleFunc("POST /admin/reload", p.adminReload)
+	mux.HandleFunc("POST /admin/shutdown", p.adminShutdown)
 	mux.HandleFunc("GET /admin/session-cost", p.adminSessionCost)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -339,6 +340,17 @@ func (p *Proxy) adminReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, redactedConfig(p.cfg.Get()))
+}
+
+// adminShutdown answers before the drain begins: srv.Shutdown waits for this
+// very request to finish, so the hook must only signal, never block.
+func (p *Proxy) adminShutdown(w http.ResponseWriter, r *http.Request) {
+	if p.shutdown == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "shutdown hook not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	p.shutdown()
 }
 
 type sessionCostResponse struct {

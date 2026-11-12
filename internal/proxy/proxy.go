@@ -84,6 +84,10 @@ type Proxy struct {
 
 	sched *scheduler.CellScheduler
 
+	// shutdown triggers the process drain behind POST /admin/shutdown; nil
+	// when no hook is installed.
+	shutdown func()
+
 	// onRecord observes every logged record. It is a test seam; production
 	// code leaves it nil.
 	onRecord func(reqlog.RequestRecord)
@@ -140,6 +144,14 @@ func (p *Proxy) SetCostStore(s *coststore.CostStore) {
 // Claude Code reads. Without it no quota headers are emitted.
 func (p *Proxy) SetUsageLedger(l *quota.UsageLedger) {
 	p.usage = l
+}
+
+// SetShutdownHook installs the trigger behind POST /admin/shutdown. The hook
+// must return immediately: it closes a channel that drives the same graceful
+// drain as SIGTERM. Windows cannot deliver SIGTERM, so this endpoint is the
+// only way to stop the proxy without cutting streams.
+func (p *Proxy) SetShutdownHook(fn func()) {
+	p.shutdown = fn
 }
 
 // Quota reports the current spend rolled up into the quota windows.

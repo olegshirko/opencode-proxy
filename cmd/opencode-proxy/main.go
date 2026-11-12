@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -17,7 +18,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -54,6 +57,18 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to config.json")
 	addr := flag.String("addr", "", "listen address (overrides the config value)")
 	flag.Parse()
+
+	if runtime.GOOS == "windows" {
+		// A windowsgui build has no console: lifecycle logs must land in the
+		// state dir or a scheduled task's failures are invisible. The file
+		// goes first so a failing stderr write cannot swallow it.
+		dir := config.DefaultStateDir()
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			if f, err := os.OpenFile(filepath.Join(dir, "service.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				log.SetOutput(io.MultiWriter(f, os.Stderr))
+			}
+		}
+	}
 
 	loader, err := config.NewConfigLoader(*configPath)
 	if err != nil {
@@ -147,12 +162,20 @@ func main() {
 	}()
 
 	// A relaunch must not cut a streaming response in half: stop accepting new
-	// connections, let in-flight requests finish, then exit.
+	// connections, let in-flight requests finish, then exit. SIGTERM and
+	// POST /admin/shutdown share this path — Windows cannot deliver signals.
+	shutdown := make(chan struct{})
+	var shutdownOnce sync.Once
+	p.SetShutdownHook(func() { shutdownOnce.Do(func() { close(shutdown) }) })
+
 	idle := make(chan struct{})
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
+		select {
+		case <-sig:
+		case <-shutdown:
+		}
 		log.Printf("opencode-proxy: shutting down, draining in-flight requests")
 		close(stopReload)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

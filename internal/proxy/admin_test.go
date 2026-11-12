@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"time"
@@ -345,5 +346,67 @@ func TestAdminPatchConfigRejectsBadJSON(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "invalid JSON") {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestAdminShutdownTriggersHook(t *testing.T) {
+	p := newAdminHarness(t)
+	drained := make(chan struct{})
+	var once sync.Once
+	p.SetShutdownHook(func() { once.Do(func() { close(drained) }) })
+
+	for i := 0; i < 2; i++ {
+		rec := adminDo(t, p, http.MethodPost, "/admin/shutdown", "", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST %d status = %d, want 200: %s", i, rec.Code, rec.Body.String())
+		}
+		if body := decodeJSON[map[string]bool](t, rec); !body["ok"] {
+			t.Fatalf("body = %s, want ok:true", rec.Body.String())
+		}
+	}
+	select {
+	case <-drained:
+	default:
+		t.Fatal("shutdown hook was not called")
+	}
+
+	// Only POST triggers the drain.
+	if rec := adminDo(t, p, http.MethodGet, "/admin/shutdown", "", nil); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET status = %d, want 405", rec.Code)
+	}
+}
+
+func TestAdminShutdownWithoutHook(t *testing.T) {
+	p := newAdminHarness(t)
+	rec := adminDo(t, p, http.MethodPost, "/admin/shutdown", "", nil)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501", rec.Code)
+	}
+}
+
+func TestAdminShutdownRespectsAdminGuards(t *testing.T) {
+	called := false
+	hook := func() { called = true }
+
+	disabled := newAdminHarness(t, func(c *config.Config) { c.Admin.Enabled = false })
+	disabled.SetShutdownHook(hook)
+	if rec := adminDo(t, disabled, http.MethodPost, "/admin/shutdown", "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled status = %d, want 404", rec.Code)
+	}
+
+	tokened := newAdminHarness(t, func(c *config.Config) { c.Admin.Token = "secret" })
+	tokened.SetShutdownHook(hook)
+	if rec := adminDo(t, tokened, http.MethodPost, "/admin/shutdown", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", rec.Code)
+	}
+	if called {
+		t.Fatal("hook fired despite failed auth")
+	}
+	rec := adminDo(t, tokened, http.MethodPost, "/admin/shutdown", "", map[string]string{"X-Admin-Token": "secret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tokened status = %d, want 200", rec.Code)
+	}
+	if !called {
+		t.Fatal("hook was not called with a valid token")
 	}
 }
