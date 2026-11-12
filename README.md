@@ -1,5 +1,7 @@
 # opencode-proxy
 
+English | [Русский](README.ru.md)
+
 A local reverse proxy that opens the [OpenCode Go](https://opencode.ai/docs/console/go)
 model catalog — 30 models: GLM, DeepSeek, Kimi, Qwen, MiniMax and friends — to Claude
 Desktop and Claude Code, and keeps them working under real traffic: parallel agents get
@@ -59,7 +61,8 @@ suite and answers on a spare port; in-flight requests drain on restart.
 `inferenceGatewayBaseUrl: http://127.0.0.1:4000`. The `claude-config` skill in this repo
 generates the whole profile from `models.json` (picker entries, pricing, context
 windows). Without the skill, a one-field profile pointing at the proxy works too —
-the model list is then served live at `GET /v1/models`.
+the model list is then served live at `GET /v1/models`. The Claude Code CLI uses the
+same proxy — see [Claude Code](#claude-code) below.
 
 **Keep it fresh (optional).** `models.json` regenerates itself every night at 04:17 —
 the launchd timer fetches the live catalog and probes availability; the running proxy
@@ -84,37 +87,90 @@ The service runs as your user (`systemctl --user`), installs to `~/.local/bin`, 
 config in `~/.config/opencode-proxy` and state in `~/.local/state/opencode-proxy`.
 For a headless machine: `loginctl enable-linger`.
 
-**The model picker.** Generate the settings block and paste it into
-`~/.claude/settings.json` (merge it with what is already there):
+Then set up the CLI in [Claude Code](#claude-code) below — the steps are identical
+on both platforms.
 
-```bash
-make settings                        # prints ANTHROPIC_BASE_URL + modelPicker
+**Update**: `git pull && make install`.
+
+## Claude Code
+
+The proxy speaks the Anthropic API, so Claude Code needs no patches or wrappers —
+just two environment variables. Identical on macOS and Linux. Prerequisites: an
+active OpenCode Go subscription and a running proxy (`make install` + `make verify`
+from the quick start above).
+
+### 1. Point Claude Code at the proxy
+
+Install the CLI if you don't have it (`npm install -g @anthropic-ai/claude-code`),
+then merge this into `~/.claude/settings.json` — keep whatever is already there:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+    "ANTHROPIC_AUTH_TOKEN": "<your OpenCode Go token>"
+  }
+}
 ```
 
-Replace the token placeholder with your OpenCode Go token, restart Claude Code, and
-`/model` lists the catalog. Models your region cannot serve are excluded; re-probe for
-your region any time — then regenerate the block from the same file:
+The token comes from your [OpenCode Go](https://opencode.ai/docs/console/go)
+subscription; the proxy forwards it to the gateway untouched, and no Claude.ai login
+is involved. For a one-off run you can export the same two variables in the shell
+instead of editing the file.
+
+Restart Claude Code and send a message — it already goes through the proxy. Without
+a picker, the built-in model names resolve to `models.default` from `config.json`,
+and background tasks (`claude-haiku-*`) to `models.background`.
+
+### 2. Add the model picker
+
+The picker replaces Claude Code's built-in model list with the gateway catalog:
 
 ```bash
-make models                          # probes availability for your region
-make settings                        # picker now matches your region
+make models                          # probes availability with the token from step 1
+make settings                        # prints env + modelPicker
 ```
 
-**Status line and search** work as on macOS:
+Merge the printed block into `~/.claude/settings.json`, replace the token
+placeholder, restart Claude Code — `/model` now lists the catalog, each entry on its
+own native id. Models your region cannot serve are excluded; re-run both commands
+any time to re-probe. The proxy picks up the regenerated `models.json` within
+seconds, no restart.
+
+### 3. Status line (optional)
+
+Real session cost plus the 5-hour / weekly / monthly allowance percentages, live:
 
 ```bash
 make statusline
-# then in ~/.claude/settings.json:
-# "statusLine": { "type": "command", "command": "/…/opencode-proxy/bin/statusline" }
+```
 
+Then in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": { "type": "command", "command": "/path/to/opencode-proxy/bin/statusline" }
+}
+```
+
+### 4. Web search (optional)
+
+`WebSearch` is not available behind a gateway; the MCP bridge restores it:
+
+```bash
 go build -o bin/oc-search-mcp ./cmd/oc-search-mcp
 claude mcp add --scope user oc-search -- "$PWD/bin/oc-search-mcp"
 ```
 
-The search MCP bridges to a local OpenCode CLI (`opencode api`) — install
+The bridge calls a local OpenCode CLI (`opencode api`) — install
 [OpenCode](https://opencode.ai) if you want search.
 
-**Update**: `git pull && make install`.
+### Check that it works
+
+```bash
+make verify                          # the proxy is alive
+tail -f var/proxy.log                # one line per Claude Code request
+```
 
 ## What each part is for
 
