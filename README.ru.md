@@ -12,7 +12,7 @@ Qwen, MiniMax и другие — для Claude Desktop и Claude Code, и де�
 | Платформа | Поддержка |
 |---|---|
 | macOS | Полная: сервис, профиль десктоп-приложения, строка статуса, поиск, ночное обновление |
-| Linux | Полная для Claude Code CLI: systemd user service, пикер моделей, строка статуса, поиск |
+| Linux | Полная для Claude Code CLI: systemd user service, пикер моделей, строка статуса, поиск, ночное обновление |
 | Windows | Планируется (фаза 2) |
 
 ## Зачем
@@ -90,6 +90,11 @@ make verify                          # админ-статус отвечает;
 
 Дальше настройте CLI в разделе [Claude Code](#claude-code) ниже — шаги одинаковы
 на обеих платформах.
+
+**Держать каталог свежим (опционально).** `make timer` ставит systemd user-таймер —
+то же ночное обновление, что на macOS (ежедневно в 04:17, догоняет после простоя).
+Лог: `journalctl --user -u ai.opencode-proxy.models.service`. `make timer-uninstall`
+снимает.
 
 **Обновление**: `git pull && make install`.
 

@@ -11,7 +11,7 @@ of the monthly allowance is accounted for. One Go binary, no dependencies.
 | Platform | Support |
 |---|---|
 | macOS | Full: service, desktop-app profile, status line, search, nightly refresh |
-| Linux | Full for Claude Code CLI: systemd user service, model picker, status line, search |
+| Linux | Full for Claude Code CLI: systemd user service, model picker, status line, search, nightly refresh |
 | Windows | Coming (phase 2) |
 
 ## Why
@@ -89,6 +89,11 @@ For a headless machine: `loginctl enable-linger`.
 
 Then set up the CLI in [Claude Code](#claude-code) below — the steps are identical
 on both platforms.
+
+**Keep it fresh (optional).** `make timer` installs a systemd user timer — the same
+nightly refresh as on macOS (daily 04:17, catches up after downtime). Log:
+`journalctl --user -u ai.opencode-proxy.models.service`. `make timer-uninstall`
+removes it.
 
 **Update**: `git pull && make install`.
 

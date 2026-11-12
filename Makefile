@@ -12,6 +12,7 @@ TIMER   := $(HOME)/Library/LaunchAgents/ai.opencode.proxy.models.plist
 LABEL   := ai.opencode.proxy
 TIMER_LABEL := ai.opencode.proxy.models
 SERVICE := ai.opencode-proxy
+MODELS_SERVICE := ai.opencode-proxy.models
 UID     := $(shell id -u)
 
 # Where the running proxy keeps its config and state. macOS keeps the
@@ -119,12 +120,12 @@ models: genmodels
 settings: genmodels
 	go run ./cmd/genmodels -out $(CONFIG_DIR)/models.json -settings
 
-# Installs the daily models.json refresh (macOS launchd timer for now; Linux
-# gets a systemd timer as a follow-up). Every night the timer regenerates the
-# file from the live catalog and probes availability; the running proxy picks
-# the file up by mtime, no restart involved.
+# Installs the daily models.json refresh: launchd on macOS, a systemd user
+# timer on Linux. Every night the timer regenerates the file from the live
+# catalog and probes availability; the running proxy picks the file up by
+# mtime, no restart involved.
+ifeq ($(OS),Darwin)
 timer: genmodels
-	@if [ "$(OS)" != "Darwin" ]; then echo "make timer is macOS-only for now (systemd timer is a follow-up)"; exit 1; fi
 	@mkdir -p $(CURDIR)/var
 	@sed -e 's|__HOME__|$(HOME)|g' deploy/ai.opencode.proxy.models.plist.template > $(TIMER)
 	@launchctl bootout gui/$(UID)/$(TIMER_LABEL) 2>/dev/null || true
@@ -135,3 +136,21 @@ timer-uninstall:
 	@launchctl bootout gui/$(UID)/$(TIMER_LABEL) 2>/dev/null || true
 	@rm -f $(TIMER)
 	@echo "removed $(TIMER_LABEL)"
+else
+timer: genmodels
+	@mkdir -p $(HOME)/.local/bin $(HOME)/.config/systemd/user
+	@install -m 0755 $(GEN) $(HOME)/.local/bin/genmodels
+	@sed -e 's|__HOME__|$(HOME)|g' deploy/opencode-proxy.models.service.template \
+		> $(HOME)/.config/systemd/user/$(MODELS_SERVICE).service
+	@sed -e 's|__HOME__|$(HOME)|g' deploy/opencode-proxy.models.timer.template \
+		> $(HOME)/.config/systemd/user/$(MODELS_SERVICE).timer
+	@systemctl --user daemon-reload
+	@systemctl --user enable --now $(MODELS_SERVICE).timer
+	@echo "installed $(MODELS_SERVICE).timer; runs daily 04:17; log: journalctl --user -u $(MODELS_SERVICE).service"
+
+timer-uninstall:
+	@systemctl --user disable --now $(MODELS_SERVICE).timer 2>/dev/null || true
+	@rm -f $(HOME)/.config/systemd/user/$(MODELS_SERVICE).service $(HOME)/.config/systemd/user/$(MODELS_SERVICE).timer
+	@systemctl --user daemon-reload
+	@echo "removed $(MODELS_SERVICE).timer"
+endif

@@ -1,0 +1,7 @@
+[Unit]
+Description=opencode-proxy: refresh models.json from the live catalog (regional probe)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__HOME__/.local/bin/genmodels -out __HOME__/.config/opencode-proxy/models.json -probe -token-file __HOME__/.claude/settings.json
