@@ -1,0 +1,35 @@
+name: build
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [darwin, linux]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Pure Go cross-compiles from one runner; no macOS runner needed.
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -trimpath -o dist/opencode-proxy ./cmd/opencode-proxy
+          go build -trimpath -o dist/genmodels ./cmd/genmodels
+          go build -trimpath -o dist/statusline ./statusline
+          go build -trimpath -o dist/oc-search-mcp ./cmd/oc-search-mcp
+          tar -czf "opencode-proxy_${GOOS}_${GOARCH}.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opencode-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: opencode-proxy_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+          retention-days: 14
